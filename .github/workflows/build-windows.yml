@@ -56,6 +56,24 @@ jobs:
       - name: Compilar (release)
         run: cargo build --release
 
+      - name: Executáveis sem o runtime do Visual C++ (crt-static)
+        shell: pwsh
+        run: |
+          # .cargo/config.toml embute o runtime; nenhum .exe pode importar vcruntime140.dll, msvcp, ucrtbase ou api-ms-win-crt-*
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * `
+                -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -Last 1
+          if (-not $dumpbin) { Write-Error "dumpbin.exe não encontrado"; exit 1 }
+          foreach ($exe in 'Ferramentas1Doc.exe', 'ferramentas1doc-cli.exe') {
+            $saida = & $dumpbin.FullName /nologo /dependents "target\release\$exe"
+            if ($LASTEXITCODE -ne 0) { $saida; Write-Error "dumpbin falhou em $exe"; exit 1 }
+            $dlls = @($saida | Where-Object { $_ -match '^\s+\S+\.dll\s*$' } | ForEach-Object { $_.Trim() })
+            Write-Host "$exe importa: $($dlls -join ', ')"
+            if (-not ($dlls -contains 'KERNEL32.dll')) { $saida; Write-Error "lista de DLLs de $exe não reconhecida"; exit 1 }
+            $runtime = @($dlls | Where-Object { $_ -match '^(vcruntime|msvcp|ucrtbase|api-ms-win-crt-)' })
+            if ($runtime.Count -gt 0) { Write-Error "$exe ainda depende de: $($runtime -join ', ')"; exit 1 }
+          }
+
       - name: Autoteste do executável
         shell: pwsh
         run: |

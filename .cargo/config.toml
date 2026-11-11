@@ -1,0 +1,5 @@
+# Windows: embute o runtime do Visual C++ (vcruntime140.dll e a UCRT) nos
+# executáveis, para que rodem num Windows sem o Visual C++ Redistributable.
+# Vale para o `cargo build` do build\build.bat e do GitHub Actions.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

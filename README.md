@@ -19,6 +19,9 @@ instalada junto.
 - **Instalação:** um executável (`Ferramentas1Doc.exe`) e a linha de comando
   (`ferramentas1doc-cli.exe`), em `%LOCALAPPDATA%\Programs\Ferramentas 1Doc
   Rust`, com o atalho *Ferramentas 1Doc (Rust)*. Não substitui a versão Python.
+  O runtime do Visual C++ vai embutido nos executáveis (`crt-static`, em
+  `.cargo/config.toml`), então não é preciso instalar o Visual C++
+  Redistributable; o CI confere que os `.exe` não importam `vcruntime140.dll`.
 - **Janela:** egui em vez de Tk, com o mesmo arranjo. O desenho usa wgpu
   (DirectX 12, com o WARP em software onde não há placa de vídeo) ou, sem
   adaptador, OpenGL. `FERRAMENTAS1DOC_DESENHO=glow` ou `wgpu` força um deles.

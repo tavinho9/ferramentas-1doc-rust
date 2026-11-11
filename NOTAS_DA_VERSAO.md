@@ -10,6 +10,7 @@ dados, então a sessão do 1Doc e os caches valem para as duas: quem já entrou
 pela versão Python não precisa entrar de novo.
 
 **Instalação:** baixe o `Ferramentas1Doc-Rust-Setup-1.1.0.exe` abaixo e
-execute. Não precisa ser administrador. O atalho no menu Iniciar se chama
+execute. Não precisa ser administrador nem instalar o Visual C++
+Redistributable: o que o programa usa dele já vai dentro do executável. O atalho no menu Iniciar se chama
 *Ferramentas 1Doc (Rust)*. Se o Windows avisar "O Windows protegeu o
 computador", clique em *Mais informações → Executar assim mesmo*.
