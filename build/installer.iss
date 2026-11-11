@@ -42,9 +42,12 @@ Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortugue
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
+[InstallDelete]
+; A linha de comando saiu do programa; apaga a que ficou de versões anteriores.
+Type: files; Name: "{app}\ferramentas1doc-cli.exe"
+
 [Files]
 Source: "..\target\release\Ferramentas1Doc.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\target\release\ferramentas1doc-cli.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"

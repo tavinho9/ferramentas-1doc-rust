@@ -1355,7 +1355,7 @@ pub fn executar(
     Ok(Some(caminho_xlsx))
 }
 
-/// Dia digitado na linha de comando: vazio/"hoje", "ontem" ou uma data.
+/// Dia digitado na aba: vazio/"hoje", "ontem" ou uma data.
 pub fn ler_dia(txt: &str, hoje: NaiveDate) -> Option<NaiveDate> {
     let t = txt.trim().to_lowercase();
     match t.as_str() {

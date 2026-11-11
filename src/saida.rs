@@ -1,10 +1,10 @@
-//! Saída das ferramentas (o `print` dos scripts) → janela, terminal e log.
+//! Saída das ferramentas (o `print` dos scripts) → janela e log.
 //!
 //! As ferramentas escrevem com `msg!`/`msg_sem_quebra!`, inclusive com `\r`
 //! para atualizar uma linha de progresso ("página 3/12…"). Na janela, cada
-//! pedaço vai para um canal que ela consome; no programa de linha de
-//! comando, para o stdout. Durante uma execução da janela, tudo é espelhado
-//! no `.log` dela (com cada atualização de progresso numa linha).
+//! pedaço vai para um canal que ela consome. Durante uma execução da janela,
+//! tudo é espelhado no `.log` dela (com cada atualização de progresso numa
+//! linha).
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -15,7 +15,6 @@ use std::sync::{Arc, Mutex};
 type Avisar = Box<dyn Fn() + Send + Sync>;
 
 enum Destino {
-    Stdout,
     Fila(Mutex<Sender<String>>, Option<Avisar>),
     Memoria(Mutex<String>),
     Nada,
@@ -35,11 +34,6 @@ impl Saida {
             destino,
             arquivo: Mutex::new(None),
         }))
-    }
-
-    /// Terminal (programa de linha de comando).
-    pub fn stdout() -> Self {
-        Self::nova(Destino::Stdout)
     }
 
     /// Fila consumida pela janela; `avisar` acorda a janela (request_repaint).
@@ -69,11 +63,6 @@ impl Saida {
             return;
         }
         match &self.0.destino {
-            Destino::Stdout => {
-                let mut o = std::io::stdout().lock();
-                let _ = o.write_all(texto.as_bytes());
-                let _ = o.flush();
-            }
             Destino::Fila(tx, avisar) => {
                 let _ = tx.lock().unwrap().send(texto.to_string());
                 if let Some(a) = avisar {

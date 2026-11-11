@@ -16,12 +16,13 @@ instalada junto.
   mesmos arquivos e formatos: `sessao.json`, `config.json`,
   `hash_cache_1doc.json`, `1doc_cache.json` e o perfil do navegador. As duas
   versões compartilham a sessão e os caches.
-- **Instalação:** um executável (`Ferramentas1Doc.exe`) e a linha de comando
-  (`ferramentas1doc-cli.exe`), em `%LOCALAPPDATA%\Programs\Ferramentas 1Doc
-  Rust`, com o atalho *Ferramentas 1Doc (Rust)*. Não substitui a versão Python.
-  O runtime do Visual C++ vai embutido nos executáveis (`crt-static`, em
+- **Instalação:** um executável (`Ferramentas1Doc.exe`), em
+  `%LOCALAPPDATA%\Programs\Ferramentas 1Doc Rust`, com o atalho *Ferramentas
+  1Doc (Rust)*. Não substitui a versão Python. Não há programa de linha de
+  comando: as ferramentas são usadas pela janela.
+  O runtime do Visual C++ vai embutido no executável (`crt-static`, em
   `.cargo/config.toml`), então não é preciso instalar o Visual C++
-  Redistributable; o CI confere que os `.exe` não importam `vcruntime140.dll`.
+  Redistributable; o CI confere que o `.exe` não importa `vcruntime140.dll`.
 - **Janela:** egui em vez de Tk, com o mesmo arranjo. O desenho usa wgpu
   (DirectX 12, com o WARP em software onde não há placa de vídeo) ou, sem
   adaptador, OpenGL. `FERRAMENTAS1DOC_DESENHO=glow` ou `wgpu` força um deles.
@@ -53,15 +54,6 @@ Precisa do Rust estável (<https://rustup.rs>).
 ```bash
 cargo run --release
 ```
-
-```bash
-cargo run --release --bin ferramentas1doc-cli -- busca --help
-```
-
-A linha de comando aceita os mesmos argumentos de `python -m
-ferramentas1doc.<ferramenta>`: `processos-do-dia [DIA]`, `busca [opções]`,
-`faltantes [PLANILHA] [--aba ABA] [--de DATA] [--ate DATA]` e
-`verificar-planilha [PLANILHA] [--aba ABA] [--html PASTA]`.
 
 ## Testes
 

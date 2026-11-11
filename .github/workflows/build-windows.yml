@@ -59,12 +59,12 @@ jobs:
       - name: Executáveis sem o runtime do Visual C++ (crt-static)
         shell: pwsh
         run: |
-          # .cargo/config.toml embute o runtime; nenhum .exe pode importar vcruntime140.dll, msvcp, ucrtbase ou api-ms-win-crt-*
+          # .cargo/config.toml embute o runtime; o .exe não pode importar vcruntime140.dll, msvcp, ucrtbase ou api-ms-win-crt-*
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * `
                 -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -Last 1
           if (-not $dumpbin) { Write-Error "dumpbin.exe não encontrado"; exit 1 }
-          foreach ($exe in 'Ferramentas1Doc.exe', 'ferramentas1doc-cli.exe') {
+          foreach ($exe in @('Ferramentas1Doc.exe')) {
             $saida = & $dumpbin.FullName /nologo /dependents "target\release\$exe"
             if ($LASTEXITCODE -ne 0) { $saida; Write-Error "dumpbin falhou em $exe"; exit 1 }
             $dlls = @($saida | Where-Object { $_ -match '^\s+\S+\.dll\s*$' } | ForEach-Object { $_.Trim() })
@@ -96,12 +96,15 @@ jobs:
         shell: pwsh
         run: |
           $setup = Get-ChildItem dist\Ferramentas1Doc-Rust-Setup-*.exe | Select-Object -First 1
-          $p = Start-Process $setup.FullName -Wait -PassThru `
-               -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/CURRENTUSER','/NORESTART','/LOG=instalacao.log'
           $pasta = "$env:LOCALAPPDATA\Programs\Ferramentas 1Doc Rust"
           $exe = "$pasta\Ferramentas1Doc.exe"
+          # como numa atualização da 1.0.0, que instalava a linha de comando: o instalador tem de apagá-la
+          New-Item -ItemType Directory -Force $pasta | Out-Null
+          Set-Content "$pasta\ferramentas1doc-cli.exe" 'versão anterior'
+          $p = Start-Process $setup.FullName -Wait -PassThru `
+               -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/CURRENTUSER','/NORESTART','/LOG=instalacao.log'
           if ($p.ExitCode -ne 0 -or -not (Test-Path $exe)) { Get-Content instalacao.log; exit 1 }
-          if (-not (Test-Path "$pasta\ferramentas1doc-cli.exe")) { Write-Error "linha de comando não instalada"; exit 1 }
+          if (Test-Path "$pasta\ferramentas1doc-cli.exe") { Write-Error "a linha de comando de versões anteriores ficou na pasta"; exit 1 }
           $atalho = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Ferramentas 1Doc (Rust).lnk"
           if (-not (Test-Path $atalho)) { Write-Error "atalho do menu Iniciar não criado"; exit 1 }
           $p = Start-Process $exe -ArgumentList '--autoteste','--relatorio','autoteste-instalado.txt' -Wait -PassThru
