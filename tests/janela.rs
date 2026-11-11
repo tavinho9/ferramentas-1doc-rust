@@ -219,6 +219,56 @@ fn faltantes_periodo_vai_para_a_execucao_e_fica_salvo() {
     );
 }
 
+/// A janela abre com a planilha da última vez já guardada na config: as abas
+/// dela aparecem na lista, com a ativa escolhida (lazy_read não desserializa
+/// as abas, e `active_sheet()` nela entrava em pânico ao abrir o programa).
+#[test]
+fn janela_abre_com_a_planilha_guardada_na_config() {
+    let fake = comum::Fake1Doc::novo();
+    let dd = comum::dados(&fake.base);
+    let caminho = dd.pasta_dados().join("varias abas.xlsx");
+    let mut wb = rust_xlsxwriter::Workbook::new();
+    for nome in ["Resumo", "Acompanhamento", "Arquivo"] {
+        let ws = wb.add_worksheet();
+        ws.set_name(nome).unwrap();
+        ws.write_string(0, 0, "Nº Processo").unwrap();
+        ws.write_string(1, 0, "31.632/2026").unwrap();
+    }
+    wb.worksheet_from_name("Acompanhamento")
+        .unwrap()
+        .set_active(true);
+    wb.save(&caminho).unwrap();
+    let mut cfg = config::carregar(&dd.amb);
+    cfg.planilha_faltantes = caminho.to_string_lossy().into_owned();
+    cfg.planilha_verificar = format!("\"{}\"", caminho.display()); // colado com aspas
+    config::salvar(&dd.amb, &cfg).unwrap();
+
+    let j = Janela::nova(&dd.amb, None);
+    for campos in [&j.faltantes.campos, &j.verificar.campos] {
+        assert_eq!(campos.abas, ["Resumo", "Acompanhamento", "Arquivo"]);
+        assert_eq!(campos.aba, "Acompanhamento");
+    }
+    let mut h = harness(j);
+    h.get_by_label_contains("Faltantes").click();
+    h.run(); // desenha a aba (lê as abas de novo a cada quadro)
+    assert_eq!(h.state().faltantes.campos.aba, "Acompanhamento");
+}
+
+/// Arquivo com extensão .xlsx que não é planilha: a janela abre, sem abas.
+#[test]
+fn janela_abre_com_planilha_invalida_na_config() {
+    let fake = comum::Fake1Doc::novo();
+    let dd = comum::dados(&fake.base);
+    let caminho = dd.pasta_dados().join("corrompida.xlsx");
+    std::fs::write(&caminho, b"PK\x03\x04 isto nao e um xlsx").unwrap();
+    let mut cfg = config::carregar(&dd.amb);
+    cfg.planilha_faltantes = caminho.to_string_lossy().into_owned();
+    config::salvar(&dd.amb, &cfg).unwrap();
+    let j = Janela::nova(&dd.amb, None);
+    assert!(j.faltantes.campos.abas.is_empty());
+    assert_eq!(j.faltantes.campos.aba, "");
+}
+
 #[test]
 fn configuracoes_salvam_e_validam() {
     let fake = comum::Fake1Doc::novo();

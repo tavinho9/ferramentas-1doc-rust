@@ -580,14 +580,13 @@ impl CamposPlanilha {
         let (mut nomes, mut ativa) = (Vec::new(), String::new());
         if !caminho.is_empty()
             && Path::new(&caminho).is_file()
-            && let Ok(n) = verificadores::abas(Path::new(&caminho))
+            && let Ok((n, a)) = verificadores::abas(Path::new(&caminho))
         {
-            nomes = n;
-            ativa = umya_spreadsheet::reader::xlsx::lazy_read(Path::new(&caminho))
-                .ok()
-                .map(|wb| wb.active_sheet().name().to_string())
+            ativa = a
                 .filter(|a| !a.is_empty())
-                .unwrap_or_else(|| nomes.first().cloned().unwrap_or_default());
+                .or_else(|| n.first().cloned())
+                .unwrap_or_default();
+            nomes = n;
         }
         if !nomes.contains(&self.aba) {
             self.aba = if nomes.is_empty() {

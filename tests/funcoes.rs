@@ -643,3 +643,16 @@ fn citacoes_le_despacho_com_varias_classes() {
     assert_eq!(hashes, ["AAAA1111BBBB2222CCCC"]);
     assert_eq!(numeros, ["31.700/2026", "31.800/2026", "31.900/2026"]);
 }
+
+/// activeTab apontando para uma aba que não existe (arquivo editado por
+/// outro programa): fica a primeira, sem pânico.
+#[test]
+fn aba_ativa_fora_do_intervalo_fica_a_primeira() {
+    use ferramentas1doc::verificadores::aba_ativa;
+    let mut wb = umya_spreadsheet::new_file();
+    wb.new_sheet("Acompanhamento").unwrap();
+    wb.workbook_view_mut().set_active_tab(1);
+    assert_eq!(aba_ativa(&wb).as_deref(), Some("Acompanhamento"));
+    wb.workbook_view_mut().set_active_tab(9);
+    assert_eq!(aba_ativa(&wb).as_deref(), Some("Sheet1"));
+}
