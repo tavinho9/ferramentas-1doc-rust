@@ -483,16 +483,227 @@ mod busca_argv_testes {
             ],
             "derivados": ["2/2026", "9/2026", "8/2026"]
         });
-        let nums: Vec<String> = novos_processos(Some(&det))
+        let nums: Vec<String> = novos_processos(Some(&det), None, true)
             .into_iter()
             .map(|n| n.numero)
             .collect();
         assert_eq!(nums, ["8/2026", "9/2026"]); // do mais antigo
         // detalhe gravado antes desta leitura: só os números, sem data
-        let velho = novos_processos(Some(&serde_json::json!({"derivados": ["2/2026"]})));
+        let velho = novos_processos(
+            Some(&serde_json::json!({"derivados": ["2/2026"]})),
+            None,
+            true,
+        );
         assert_eq!(velho.len(), 1);
         assert_eq!((velho[0].numero.as_str(), velho[0].data), ("2/2026", None));
-        assert!(novos_processos(Some(&serde_json::json!({}))).is_empty());
+        assert!(novos_processos(Some(&serde_json::json!({})), None, true).is_empty());
+    }
+
+    #[test]
+    fn citados_no_texto_e_nos_despachos() {
+        use ferramentas1doc::busca::parse::citados;
+        let fonte = r#"<div class="emissao_conteudo"><div class="texto_original">Referente à Fase Preparatória
+      nº 30.500/2026, conforme a Lei nº 14.133/2021 e a requisição 77/2026. Este é o processo 41.000/2026.</div></div>
+      <table class="despacho"><tr><td><div class="texto_original fr-view">A demanda prossegue no
+      <a href="./?pg=doc/ver&hash=65edaaaa&origem=emissao_anexada">Proc. Administrativo 39.144/2026</a>;
+      veja o <a href="./?pg=doc/ver&hash=7777bbbb">Memorando 512/2026</a> e o
+      <a href="./?pg=doc/ver&hash=8888cccc">link</a>. Processo 39.144/2026 de novo.</div></td></tr></table>
+      <div class="outro">processo 99.999/2026 fora dos blocos de texto</div>"#;
+        let doc = ferramentas1doc::html::doc(fonte);
+        assert_eq!(
+            citados(&doc, "41.000/2026", "HASHPROPRIO"),
+            [
+                serde_json::json!({"numero": "30.500/2026", "hash": "", "fonte": "texto"}),
+                // link e número do mesmo processo: um registro
+                serde_json::json!({"numero": "39.144/2026", "hash": "65EDAAAA", "fonte": "link"}),
+                // link sem número: confere-se ao abrir
+                serde_json::json!({"numero": "", "hash": "8888CCCC", "fonte": "link"}),
+            ]
+        );
+    }
+
+    /// A menção escolhida na lista do 1Doc (data-mention="2"), com a marcação
+    /// real: no corpo do despacho e na lista de documentos mencionados, fora do
+    /// bloco de texto. Vale sem contexto antes do número e vem primeiro, mesmo
+    /// que o número também apareça digitado.
+    #[test]
+    fn citados_mencao_do_1doc() {
+        use ferramentas1doc::busca::parse::citados;
+        let fonte = r#"<table class="despacho"><tr><td class="celula_despacho"><div class="texto_original fr-view">
+      Segue em <a class="mention label mention_2" href="https://app.1doc.com.br/?pg=doc/ver&amp;hash=5476D715A594730A44C82DCD&amp;itd=3&amp;gr=10&amp;origem=mention&amp;s=montesclaros" target="_blank" data-mention="2" data-tipo="2" data-id="55747711" rel="noreferrer noopener">Proc. Administrativo 26.831/2026 - Licitação da Construção da Praça de Santa Rita Rural</a>,
+      processo 26.831/2026.</div>
+      <a class=" pre_visualizar" data-mention="2" href="./?pg=doc/ver&amp;hash=5476D715A594730A44C82DCD&amp;itd=3&amp;origem=emissao_anexada">
+        <i class="icon-folder-open"></i> Proc. Administrativo 26.831/2026 - Abertura de Procedimento Licitatório </a>
+      <a class=" pre_visualizar" data-mention="2" href="./?pg=doc/ver&amp;hash=AAAA0000BBBB1111CCCC2222">
+        <i class="icon-folder-open"></i> Proc. Administrativo 27.000/2026 - Fase Preparatória </a>
+      <a class="mention label mention_1" data-mention="1" href="./?pg=usuario&amp;hash=FFFF">Maria</a>
+      </td></tr></table>"#;
+        let doc = ferramentas1doc::html::doc(fonte);
+        assert_eq!(
+            citados(&doc, "1/2026", ""),
+            [
+                serde_json::json!({"numero": "26.831/2026", "hash": "5476D715A594730A44C82DCD", "fonte": "mencao"}),
+                serde_json::json!({"numero": "27.000/2026", "hash": "AAAA0000BBBB1111CCCC2222", "fonte": "mencao"}),
+            ]
+        );
+    }
+
+    const FASE: &str = "Fase Preparatória de Procedimento Licitatório";
+    const ABERTURA: &str = "Abertura de Procedimento Licitatório";
+    const ELAB: &str = "Elaboração de Documentação Preparatória";
+
+    fn det(
+        numero: &str,
+        assunto: &str,
+        emissao: &str,
+        pai: &str,
+        citados: &[&str],
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "numero": numero, "tipo_doc": "Proc. Administrativo", "quadro": assunto, "tipo": assunto,
+            "pai": pai, "emissao": emissao, "hash": "", "etapa": "Validação de Requisição",
+            "url": format!("u/{numero}"),
+            "citados": citados.iter().map(|c| serde_json::json!({"numero": c, "hash": ""})).collect::<Vec<_>>(),
+        })
+    }
+
+    #[test]
+    fn aceita_mencao() {
+        use ferramentas1doc::busca::registro::aceita_mencao;
+        let fase = det("30.500/2026", FASE, "2026-11-01T09:00:00", "", &[]);
+        let abertura = det("41.000/2026", ABERTURA, "2026-11-05T09:00:00", "", &[]);
+        assert!(aceita_mencao(&fase, &abertura));
+        assert!(aceita_mencao(
+            &fase,
+            &det(
+                "41.000/2026",
+                ABERTURA,
+                "2026-11-05T09:00:00",
+                "30.500/2026",
+                &[]
+            )
+        ));
+        assert!(aceita_mencao(
+            &det("1/2026", ELAB, "2026-10-01T09:00:00", "", &[]),
+            &fase
+        ));
+        assert!(aceita_mencao(
+            &det("1/2026", "Outro assunto", "2026-10-01T09:00:00", "", &[]),
+            &fase
+        ));
+        let mut memorando = abertura.clone();
+        memorando["tipo_doc"] = serde_json::json!("Memorando");
+        let rejeitados = [
+            // emitida de outro processo
+            det(
+                "41.000/2026",
+                ABERTURA,
+                "2026-11-05T09:00:00",
+                "28.000/2026",
+                &[],
+            ),
+            // anterior à fase
+            det("41.000/2026", ABERTURA, "2026-10-05T09:00:00", "", &[]),
+            // fora da licitação
+            det(
+                "41.000/2026",
+                "Pagamento de Fornecedor",
+                "2026-11-05T09:00:00",
+                "",
+                &[],
+            ),
+            // outra fase: referência
+            det("30.900/2026", FASE, "2026-11-05T09:00:00", "", &[]),
+            memorando,
+            // ele mesmo
+            det("30.500/2026", ABERTURA, "2026-11-05T09:00:00", "", &[]),
+        ];
+        for d in &rejeitados {
+            assert!(!aceita_mencao(&fase, d), "{d}");
+        }
+    }
+
+    #[test]
+    fn novos_processos_por_vinculo() {
+        use ferramentas1doc::busca::registro::{Universo, novos_processos, texto_novos};
+        let mut fase = det(
+            "30.500/2026",
+            FASE,
+            "2026-11-01T09:00:00",
+            "",
+            &["41.000/2026", "40.001/2026"],
+        );
+        fase["emissoes"] = serde_json::json!([
+            {"numero": "40.001/2026", "tipo": "Proc. Administrativo", "data": "2026-11-02T10:00:00"}
+        ]);
+        fase["citados"][0]["fonte"] = serde_json::json!("mencao");
+        let mut abertura = det(
+            "41.000/2026",
+            ABERTURA,
+            "2026-11-05T09:00:00",
+            "",
+            &["30.500/2026"],
+        );
+        abertura["citados"][0]["fonte"] = serde_json::json!("texto");
+        let outros = [
+            fase.clone(),
+            det(
+                "40.001/2026",
+                ABERTURA,
+                "2026-11-02T10:00:00",
+                "30.500/2026",
+                &["30.500/2026"],
+            ),
+            abertura,
+            det(
+                "41.050/2026",
+                ABERTURA,
+                "2026-11-06T09:00:00",
+                "30.500/2026",
+                &[],
+            ),
+            det(
+                "41.100/2026",
+                ABERTURA,
+                "2026-11-07T09:00:00",
+                "28.000/2026",
+                &["30.500/2026"],
+            ),
+        ];
+        let uni = Universo::novo(outros.iter());
+        let novos = novos_processos(Some(&fase), Some(&uni), true);
+        // emissão normal basta (a menção e a origem do mesmo processo não se somam); menções se somam entre si
+        let v: Vec<(&str, Vec<&str>)> = novos
+            .iter()
+            .map(|n| (n.numero.as_str(), n.vinculos.clone()))
+            .collect();
+        assert_eq!(
+            v,
+            [
+                ("40.001/2026", vec!["emissão"]),
+                ("41.000/2026", vec!["citado neste", "cita este"]),
+                ("41.050/2026", vec!["origem"]),
+            ]
+        );
+        assert_eq!(
+            novos[1].data,
+            NaiveDate::from_ymd_opt(2026, 11, 5)
+                .unwrap()
+                .and_hms_opt(9, 0, 0)
+        );
+        assert_eq!(novos[1].etapa, "Validação de Requisição");
+        // a menção do 1Doc vem antes do número digitado
+        assert_eq!(novos[1].fontes, ["mencao", "texto"]);
+        assert_eq!(
+            texto_novos(&novos),
+            "40.001/2026 (emissão), 41.000/2026 (citado neste + cita este), 41.050/2026 (origem)"
+        );
+        // só a emissão normal: fica a origem, saem as menções
+        let so_normal: Vec<String> = novos_processos(Some(&fase), Some(&uni), false)
+            .into_iter()
+            .map(|n| n.numero)
+            .collect();
+        assert_eq!(so_normal, ["40.001/2026", "41.050/2026"]);
     }
 
     #[test]
@@ -642,6 +853,23 @@ fn citacoes_le_despacho_com_varias_classes() {
     let (hashes, numeros) = ferramentas1doc::verificadores::citacoes(html, "31.632/2026", "2026");
     assert_eq!(hashes, ["AAAA1111BBBB2222CCCC"]);
     assert_eq!(numeros, ["31.700/2026", "31.800/2026", "31.900/2026"]);
+}
+
+/// A lista de documentos mencionados fica fora do .texto_original; a menção a usuário não conta.
+#[test]
+fn citacoes_le_mencao_do_1doc_fora_do_texto() {
+    let html = concat!(
+        r#"<table class="relative despacho"><tr><td class="celula_despacho">"#,
+        r#"<div class="texto_original fr-view">Segue.</div>"#,
+        r#"<a class=" pre_visualizar" data-mention="2" href="./?pg=doc/ver&amp;hash=5476D715A594730A44C82DCD"#,
+        r#"&amp;itd=3&amp;origem=emissao_anexada"><i class="icon-folder-open"></i> Proc. Administrativo "#,
+        r#"26.831/2026 - Abertura de Procedimento Licitatório</a>"#,
+        r#"<a class="mention label mention_1" data-mention="1" href="./?pg=x&amp;hash=FFFF0000FFFF0000FFFF">"#,
+        r#"Maria</a></td></tr></table>"#,
+    );
+    let (hashes, numeros) = ferramentas1doc::verificadores::citacoes(html, "1/2026", "2026");
+    assert_eq!(hashes, ["5476D715A594730A44C82DCD"]);
+    assert!(numeros.is_empty());
 }
 
 /// activeTab apontando para uma aba que não existe (arquivo editado por

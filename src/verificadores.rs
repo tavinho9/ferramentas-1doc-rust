@@ -604,7 +604,9 @@ pub fn ler_origem(fonte: &str) -> (Option<String>, Option<String>) {
     (hash_de(html::attr_ou_vazio(a, "href")), num)
 }
 
-/// Candidatos citados nos despachos: (hashes de links, números).
+/// Candidatos citados nos despachos: (hashes de links, números). As menções
+/// do 1Doc (data-mention="2") vêm primeiro e valem em qualquer lugar da
+/// página; depois, os links e os números dos blocos .texto_original.
 pub fn citacoes(
     fonte: &str,
     proprio_numero: &str,
@@ -621,6 +623,18 @@ pub fn citacoes(
         .collect();
     let (mut hashes, mut numeros): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
     let ano_min: i64 = proprio_ano.parse().unwrap_or(0);
+    // Menção do 1Doc (o documento escolhido na lista ao escrever o despacho):
+    // <a class="mention label mention_2" data-mention="2" href="…&hash=…&origem=mention…">
+    // no corpo do despacho e, repetida, na lista de documentos mencionados
+    // (<a class=" pre_visualizar" data-mention="2" …>), que fica fora do
+    // .texto_original. Vem primeiro e vale em qualquer lugar da página.
+    for a in doc.select(crate::sel!(r#"[data-mention="2"], .mention_2"#)) {
+        if let Some(h) = hash_de(html::attr_ou_vazio(a, "href"))
+            && !hashes.contains(&h)
+        {
+            hashes.push(h);
+        }
+    }
     for b in &blocos {
         for a in b.select(crate::sel!("a[href]")) {
             if let Some(h) = hash_de(html::attr_ou_vazio(a, "href"))

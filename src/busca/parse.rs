@@ -747,6 +747,120 @@ fn despachos(doc: &Html) -> Vec<Value> {
     out.into_iter().map(|(_, _, o)| Value::Object(o)).collect()
 }
 
+/// No máximo quantos processos citados ficam no detalhe.
+pub const MAX_CITADOS: usize = 40;
+
+/// De onde veio a citação, da mais confiável para a menos (ver `citados`).
+pub const FONTES_CITACAO: [&str; 3] = ["mencao", "link", "texto"];
+
+/// Posição em FONTES_CITACAO (menor = mais confiável); fonte desconhecida fica por último.
+pub fn forca_fonte(fonte: &str) -> usize {
+    FONTES_CITACAO
+        .iter()
+        .position(|f| *f == fonte)
+        .unwrap_or(FONTES_CITACAO.len())
+}
+
+/// Outros processos mencionados neste, de três fontes, da mais confiável para a menos:
+///   - "mencao": a menção do 1Doc, escolhida na lista ao escrever o despacho.
+///     Vem como `<a data-mention="2">` com o hash no href e "Proc.
+///     Administrativo N/AAAA - …" no texto, tanto no corpo do despacho (class
+///     "mention label mention_2") quanto na lista de documentos mencionados
+///     (class "pre_visualizar"). Lida em qualquer lugar da página;
+///   - "link": outro link para documento dentro do texto de abertura e dos
+///     despachos (blocos .texto_original), com o número quando o texto do
+///     link o traz;
+///   - "texto": número NN.NNN/AAAA digitado nesses blocos, com contexto de
+///     processo antes ("processo", "abertura", "nº"…) e sem contexto de lei,
+///     requisição, contrato etc. (a regra do Faltantes/Verificar).
+///
+/// Não filtra por ano: o mesmo registro serve para os dois sentidos (este
+/// cita o novo; o novo cita este), e a data é conferida no uso
+/// (`aceita_mencao`). Devolve [{numero, hash, fonte}], um por processo (com
+/// a fonte mais confiável), no máximo MAX_CITADOS.
+pub fn citados(doc: &Html, proprio_numero: &str, proprio_hash: &str) -> Vec<Value> {
+    let mut out: Vec<(String, String, &'static str)> = Vec::new();
+    let mut add = |numero: String, h: String, fonte: &'static str| {
+        if (!numero.is_empty() && numero == proprio_numero) || (!h.is_empty() && h == proprio_hash)
+        {
+            return;
+        }
+        // link e número do mesmo processo viram um registro só
+        if let Some(c) = out
+            .iter_mut()
+            .find(|c| (!numero.is_empty() && c.0 == numero) || (!h.is_empty() && c.1 == h))
+        {
+            if c.0.is_empty() {
+                c.0 = numero;
+            }
+            if c.1.is_empty() {
+                c.1 = h;
+            }
+            if forca_fonte(fonte) < forca_fonte(c.2) {
+                c.2 = fonte;
+            }
+            return;
+        }
+        if out.len() < MAX_CITADOS {
+            out.push((numero, h, fonte));
+        }
+    };
+    // (número, hash) de um link para documento que não diz ser memorando, ofício etc.
+    let de_link = |a: ElementRef<'_>| -> Option<(String, String)> {
+        let h = param(&consulta(html::attr_ou_vazio(a, "href")), "hash").to_uppercase();
+        let rotulo = t1(a);
+        let num = numeros_de_texto(&rotulo).into_iter().next();
+        ((!h.is_empty() || num.is_some())
+            && !re!(r"^(memorando|oficio|parecer|circular|despacho|decreto|portaria|anexo)")
+                .is_match(&normtxt(&rotulo)))
+        .then(|| (num.unwrap_or_default(), h))
+    };
+    for a in doc.select(sel!(r#"[data-mention="2"], .mention_2"#)) {
+        if let Some((n, h)) = de_link(a) {
+            add(n, h, "mencao");
+        }
+    }
+    // Todo bloco com a classe texto_original, mesmo com outras junto
+    // (class="texto_original fr-view"); um bloco dentro de outro entra pelo de fora.
+    let e_bloco = |e: ElementRef| e.value().classes().any(|c| c == "texto_original");
+    let blocos: Vec<ElementRef> = doc
+        .select(sel!(".texto_original"))
+        .filter(|e| html::ancestral(*e, e_bloco).is_none())
+        .collect();
+    for b in &blocos {
+        for a in b.select(sel!("a[href]")) {
+            if !param(&consulta(html::attr_ou_vazio(a, "href")), "hash").is_empty()
+                && let Some((n, h)) = de_link(a)
+            {
+                add(n, h, "link");
+            }
+        }
+        let texto = html::texto(*b, " ");
+        for m in RE_NUM_LIVRE.captures_iter(texto.as_str()).flatten() {
+            let Some(n) = norm_numero(&format!("{}/{}", &m[1], &m[2])) else {
+                continue;
+            };
+            let inicio = m.get(0).map(|g| g.start()).unwrap_or(0);
+            let anteriores: Vec<char> = texto[..inicio].chars().collect();
+            let antes_txt: String = anteriores[anteriores.len().saturating_sub(45)..]
+                .iter()
+                .collect();
+            // como o _norm do Faltantes: só letras e dígitos ("nº" vira "n")
+            let antes = crate::texto::norm(&antes_txt);
+            let c: Vec<char> = antes.chars().collect();
+            let fim: String = c[c.len().saturating_sub(30)..].iter().collect();
+            if re!(r"(proc|abertura|emitid|gerad|autuad|instaurad|\bno?\b|numero)").is_match(&antes)
+                && !re!(r"(lei|decreto|portaria|requisi|\brc\b|contrato|\bata\b|edital|pregao|oficio|memorando|resolucao|instrucao|acordao|cnpj|cpf)").is_match(&fim)
+            {
+                add(n, String::new(), "texto");
+            }
+        }
+    }
+    out.into_iter()
+        .map(|(numero, hash, fonte)| json!({"numero": numero, "hash": hash, "fonte": fonte}))
+        .collect()
+}
+
 /// O rótulo do despacho vem truncado ('Validação de ...'): casa por prefixo com o quadro.
 pub fn resolver_etapa(rotulo: &str, titulos: &[String]) -> String {
     let r = rotulo.trim();
@@ -1235,6 +1349,14 @@ pub fn parse_detalhe(fonte: &str, agora: NaiveDateTime) -> Res<Value> {
     o.insert("status_setor".into(), json!(status.join(" | ")));
     o.insert("derivados".into(), json!(derivados));
     o.insert("emissoes".into(), Value::Array(emissoes));
+    o.insert(
+        "citados".into(),
+        Value::Array(citados(
+            &doc,
+            &norm_numero(&numero).unwrap_or_default(),
+            &hash.to_uppercase(),
+        )),
+    );
     o.insert("n_despachos".into(), json!(n_desp));
     o.insert("despachos".into(), Value::Array(guardados));
     o.insert("transicoes".into(), Value::Array(trans));

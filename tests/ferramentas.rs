@@ -245,25 +245,36 @@ fn busca_novo_processo() {
             "Nº Processo",
             "Objeto",
             "Novo processo",
+            "Vínculo",
+            "Citação",
             "Emitido em",
             "Autor",
             "Setor",
-            "Etapa atual do processo"
+            "Etapa atual do processo",
+            "Etapa do novo processo"
         ]
     );
     assert_eq!(novos.len(), 2);
     assert_eq!(
-        [&novos[1][..3], &novos[1][4..]].concat(),
+        [&novos[1][..5], &novos[1][6..]].concat(),
         [
             "31.632/2026",
             "Aquisição de medicamentos",
             "40.001/2026",
+            "emissão",
+            "",
             "Maria da Silva",
             "SS-DAF",
-            "Pesquisa de Mercado"
+            "Pesquisa de Mercado",
+            ""
         ]
     );
-    assert!(mesma_data(&novos[1][3], tres_dias), "{}", novos[1][3]);
+    assert!(mesma_data(&novos[1][5], tres_dias), "{}", novos[1][5]);
+    let col_v = linhas[0]
+        .iter()
+        .position(|c| c == "Novos processos (vínculo)")
+        .unwrap();
+    assert_eq!(linhas[1][col_v], "40.001/2026 (emissão)");
     let link = comum::link(&arquivo, Some("Novos processos"), 3, 2).unwrap();
     assert!(link.contains("hash=9999AAAA0000BBBB1111"), "{link}");
     let filtros = &res.params.iter().find(|p| p.0 == "Filtros").unwrap().1;
@@ -308,7 +319,7 @@ fn busca_novo_processo() {
     .unwrap();
     let col_e: Vec<String> = comum::valores(&saida, Some("Novos processos"))
         .into_iter()
-        .map(|l| l[4].clone())
+        .map(|l| l[6].clone())
         .collect();
     assert_eq!(col_e, ["No período filtrado?", "sim"]);
     assert_eq!(fake.chaves().len(), antes);
@@ -353,6 +364,295 @@ fn busca_novo_processo() {
         .filter(|c| c.1 == "doc/ver")
         .count();
     assert_eq!(abertos, 1);
+}
+
+/// Como o 1Doc mostra, abaixo do despacho, o documento mencionado nele (marcação real, outro hash).
+const MENCAO_PRE_VISUALIZAR: &str = r#"<a class=" pre_visualizar" data-mention="2"
+  href="./?pg=doc/ver&amp;hash=AB02AAAA0000000000BB&amp;itd=3&amp;origem=emissao_anexada">
+  <i class="icon-folder-open"></i> Proc. Administrativo 39.144/2026 - Abertura de Procedimento Licitatório </a>"#;
+
+/// Fases preparatórias na caixa Em aberto e as aberturas que saíram delas sem a
+/// emissão normal ("a partir deste documento"): a abertura cita a fase, ou a
+/// fase cita a abertura.
+fn processos_mencoes(hoje: chrono::NaiveDateTime) -> Vec<comum::Outro> {
+    let fase = vec![
+        ("Elaboração de Documentos", "Ficou aqui 2 dias", false),
+        ("Etapa Final", "Esta aqui 5 dias", true),
+    ];
+    let abertura = comum::PROCESSOS[1].etapas.to_vec();
+    let outro =
+        |hash, numero, objeto, assunto, etapas: &Vec<_>, dias, caixa, despacho| comum::Outro {
+            hash,
+            numero,
+            objeto,
+            assunto,
+            etapas: etapas.clone(),
+            emissao: hoje - Duration::days(dias),
+            caixa,
+            pai: None,
+            despacho,
+            anexos: "",
+        };
+    vec![
+        // a Abertura 41.000 (Arquivados) cita esta: "cita este"
+        outro(
+            "FP01AAAA0000000000AA",
+            "30.500/2026",
+            "Fase de medicamentos",
+            comum::FASE_PREP,
+            &fase,
+            10,
+            Some("entrada"),
+            "Concluída a fase preparatória.",
+        ),
+        // esta menciona a Abertura 39.144, que não está em caixa nenhuma do setor: "citado neste".
+        // A menção do 1Doc só aparece na lista de documentos mencionados, fora do texto do despacho.
+        comum::Outro {
+            anexos: MENCAO_PRE_VISUALIZAR,
+            ..outro(
+                "FP02AAAA0000000000BB",
+                "30.600/2026",
+                "Fase de merenda",
+                comum::FASE_PREP,
+                &fase,
+                10,
+                Some("entrada"),
+                "A demanda segue para a abertura.",
+            )
+        },
+        // citada só por quem não conta: abertura com outra origem e processo de pagamento
+        outro(
+            "FP03AAAA0000000000CC",
+            "30.700/2026",
+            "Fase de obras",
+            comum::FASE_PREP,
+            &fase,
+            10,
+            Some("entrada"),
+            "Aguardando os ajustes da secretaria.",
+        ),
+        outro(
+            "AB01AAAA0000000000AA",
+            "41.000/2026",
+            "Medicamentos",
+            comum::ABERTURA,
+            &abertura,
+            2,
+            Some("arquivo"),
+            "Abertura referente à Fase Preparatória nº 30.500/2026.",
+        ),
+        outro(
+            "AB02AAAA0000000000BB",
+            "39.144/2026",
+            "Merenda",
+            comum::ABERTURA,
+            &abertura,
+            1,
+            None,
+            "Para validação.",
+        ),
+        comum::Outro {
+            pai: Some(("28.000/2026", "ZZZZ0000ZZZZ0000ZZZZ")),
+            ..outro(
+                "AB03AAAA0000000000CC",
+                "41.100/2026",
+                "Obras",
+                comum::ABERTURA,
+                &abertura,
+                1,
+                Some("arquivo"),
+                "Ver também o processo 30.700/2026.",
+            )
+        },
+        outro(
+            "PG01AAAA0000000000CC",
+            "41.200/2026",
+            "Pagamento",
+            "Pagamento de Fornecedor",
+            &fase,
+            0,
+            Some("saida"),
+            "Pagamento do processo nº 30.700/2026.",
+        ),
+    ]
+}
+
+#[test]
+fn busca_novo_processo_por_mencao() {
+    use ferramentas1doc::busca;
+    // o "-1" da busca conta do dia em Brasília
+    let hoje = busca::parse::agora_br()
+        .date()
+        .and_hms_opt(9, 15, 0)
+        .unwrap();
+    let fake = comum::Fake1Doc::com_outros(None, processos_mencoes(hoje));
+    let d = comum::dados(&fake.base);
+    let args = |v: &[&str]| -> Vec<String> { v.iter().map(|s| s.to_string()).collect() };
+    let numeros =
+        |r: &busca::Resultado| -> Vec<String> { r.regs.iter().map(|x| x.numero.clone()).collect() };
+    let buscar = |v: &[&str], offline: bool| {
+        let mut a = if offline {
+            args(&["--offline"])
+        } else {
+            args(&["--pausa", "0"])
+        };
+        a.extend(args(&["--fase", "Elaboração", "--sem-xlsx"]));
+        a.extend(args(v));
+        let cred = comum::cred();
+        busca::main(&d.amb, &a, if offline { None } else { Some(&cred) })
+            .unwrap()
+            .unwrap()
+    };
+
+    let saida = d.pasta_saida().join("mencoes.xlsx");
+    let saida_txt = saida.to_string_lossy().into_owned();
+    let res = busca::main(
+        &d.amb,
+        &args(&[
+            "--pausa",
+            "0",
+            "--fase",
+            "Elaboração",
+            "--novo-processo",
+            "--saida",
+            &saida_txt,
+        ]),
+        Some(&comum::cred()),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(numeros(&res), ["30.500/2026", "30.600/2026"]);
+    let textos: Vec<&str> = res.regs.iter().map(|r| r.novos_texto.as_str()).collect();
+    assert_eq!(
+        textos,
+        ["41.000/2026 (cita este)", "39.144/2026 (citado neste)"]
+    );
+    // a data é a de emissão do processo novo
+    let datas: Vec<chrono::NaiveDate> = res
+        .regs
+        .iter()
+        .map(|r| r.novo_processo_em.unwrap().date())
+        .collect();
+    assert_eq!(
+        datas,
+        [
+            (hoje - Duration::days(2)).date(),
+            (hoje - Duration::days(1)).date()
+        ]
+    );
+    let aba = comum::valores(&saida, Some("Novos processos"));
+    let linhas: Vec<[&str; 5]> = aba[1..]
+        .iter()
+        .map(|l| {
+            [
+                l[0].as_str(),
+                l[2].as_str(),
+                l[3].as_str(),
+                l[4].as_str(),
+                l[9].as_str(),
+            ]
+        })
+        .collect();
+    assert_eq!(
+        linhas,
+        [
+            [
+                "30.500/2026",
+                "41.000/2026",
+                "cita este",
+                "número no texto",
+                "Validação de Requisição"
+            ],
+            [
+                "30.600/2026",
+                "39.144/2026",
+                "citado neste",
+                "menção do 1Doc",
+                "Validação de Requisição"
+            ]
+        ]
+    );
+    let link = comum::link(&saida, Some("Novos processos"), 3, 3).unwrap();
+    assert!(link.contains("hash=AB02AAAA0000000000BB"), "{link}");
+    let param =
+        |r: &busca::Resultado, k: &str| r.params.iter().find(|p| p.0 == k).unwrap().1.clone();
+    assert!(param(&res, "Filtros").contains("(emissão normal ou menção)"));
+    // 5 da família em Em aberto (já abertos pela busca) e 2 aberturas nos Arquivados; o pagamento fica de fora
+    let mencoes = param(&res, "Menções");
+    assert!(
+        mencoes.contains("índice das caixas: 7 processo(s) da família da licitação"),
+        "{mencoes}"
+    );
+    assert!(
+        mencoes.contains("(2 aberto(s) agora); citados nos despachos abertos agora: 1"),
+        "{mencoes}"
+    );
+    // o índice leu as quatro caixas; a abertura fora delas foi aberta pelo link do despacho
+    assert_eq!(fake.intervalos().iter().filter(|i| i.is_some()).count(), 4);
+
+    assert_eq!(
+        numeros(&buscar(&["--sem-novo-processo"], false)),
+        ["30.700/2026"]
+    );
+    assert_eq!(
+        numeros(&buscar(&["--novo-processo-de", "-1"], false)),
+        ["30.600/2026"]
+    );
+    // só a emissão normal: nenhuma das três tem o evento, e o índice não é montado
+    let antes = fake.chaves().len();
+    let res = buscar(&["--sem-mencoes", "--novo-processo"], false);
+    assert!(res.regs.is_empty());
+    assert_eq!(
+        fake.chaves()[antes..]
+            .iter()
+            .filter(|c| c.1 == "caixa")
+            .count(),
+        1
+    ); // só a Em aberto
+    assert!(param(&res, "Menções").contains("--sem-mencoes"));
+
+    // de novo, com o cache: nada é reaberto (a última movimentação não mudou)
+    let antes = fake.chaves().len();
+    assert_eq!(
+        numeros(&buscar(&["--novo-processo"], false)),
+        ["30.500/2026", "30.600/2026"]
+    );
+    assert!(!fake.chaves()[antes..].iter().any(|c| c.1 == "doc/ver"));
+    // sem acessar o 1Doc, com o que ficou no cache
+    fake.deslogar();
+    assert_eq!(
+        numeros(&buscar(&["--novo-processo"], true)),
+        ["30.500/2026", "30.600/2026"]
+    );
+    assert_eq!(
+        numeros(&buscar(&["--sem-novo-processo"], true)),
+        ["30.700/2026"]
+    );
+
+    // Cache gravado antes de a busca ler as menções: no --offline, lacuna declarada
+    let arq = d.pasta_dados().join("1doc_cache.json");
+    let mut cache: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&arq).unwrap()).unwrap();
+    for det in cache["det"].as_object_mut().unwrap().values_mut() {
+        det.as_object_mut().unwrap().remove("citados").unwrap();
+    }
+    std::fs::write(&arq, cache.to_string()).unwrap();
+    let res = buscar(&["--sem-novo-processo"], true);
+    assert!(res.regs.is_empty());
+    assert!(
+        res.falhas
+            .iter()
+            .all(|f| f.motivo == "cache sem as menções a outros processos (modo offline)")
+    );
+    assert!(!res.falhas.is_empty());
+    // sem o filtro de novo processo, o cache antigo serve como antes
+    assert_eq!(buscar(&[], true).regs.len(), 3);
+    // com acesso, reabre o que não tem as menções e volta ao mesmo resultado
+    fake.logado.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(
+        numeros(&buscar(&["--sem-novo-processo"], false)),
+        ["30.700/2026"]
+    );
 }
 
 mod faltantes_testes {
