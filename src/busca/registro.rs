@@ -1,10 +1,15 @@
 //! Registro consolidado (listagem + detalhe), filtros e ordenação.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use chrono::NaiveDateTime;
 use serde_json::Value;
 
 use super::args::Opcoes;
-use super::parse::{GUARDAR_DESPACHOS, casa_setor, contem, de_iso, de_iso_v, igual, normcod};
+use super::parse::{
+    GUARDAR_DESPACHOS, casa_setor, contem, de_iso, de_iso_v, igual, norm_numero, normcod,
+};
 use crate::re;
 use crate::texto::{corta, normtxt};
 
@@ -29,7 +34,14 @@ impl Transicao {
     }
 }
 
-/// Um processo emitido a partir deste (evento "emitiu o … a partir deste documento").
+/// Como o novo processo foi achado (coluna "Novos processos (vínculo)" e aba
+/// "Novos processos").
+pub const V_EMISSAO: &str = "emissão";
+pub const V_ORIGEM: &str = "origem";
+pub const V_CITADO: &str = "citado neste";
+pub const V_CITA: &str = "cita este";
+
+/// Um processo novo deste, com os vínculos que o acharam.
 #[derive(Clone, Debug, Default)]
 pub struct Novo {
     pub numero: String,
@@ -37,6 +49,9 @@ pub struct Novo {
     pub autor: String,
     pub setor: String,
     pub url: String,
+    pub vinculos: Vec<&'static str>,
+    /// etapa do novo processo, quando ele foi aberto
+    pub etapa: String,
 }
 
 /// Tipo de documento de uma emissão: "Proc. Administrativo" conta como
@@ -45,10 +60,152 @@ pub fn eh_processo(tipo: &str) -> bool {
     normtxt(tipo).starts_with("proc")
 }
 
-/// Processos emitidos a partir deste, com a data já lida, do mais antigo ao
-/// mais recente. Detalhe gravado no cache antes desta leitura só tem os
-/// números ("derivados"): entram sem data.
-pub fn novos_processos(det: Option<&Value>) -> Vec<Novo> {
+/// Posição na família da licitação (0 Elaboração de Documentação
+/// Preparatória, 1 Fase Preparatória, 2 Abertura de Procedimento
+/// Licitatório) pelo quadro/assunto; None fora dela.
+pub fn familia(texto: &str) -> Option<u8> {
+    let t = normtxt(texto);
+    if re!(r"abertura de procedimento").is_match(&t) {
+        Some(2)
+    } else if re!(r"fase preparatori").is_match(&t) {
+        Some(1)
+    } else if re!(r"elaboracao de document\w* preparatori").is_match(&t) {
+        Some(0)
+    } else {
+        None
+    }
+}
+
+fn familia_det(det: &Value) -> Option<u8> {
+    familia(&format!(
+        "{} | {}",
+        s(Some(det), "quadro"),
+        s(Some(det), "tipo")
+    ))
+}
+
+fn num(v: &Value, k: &str) -> String {
+    norm_numero(&s(Some(v), k)).unwrap_or_default()
+}
+
+/// Processos já abertos (nesta busca, no índice das caixas ou no cache), para
+/// cruzar as menções nos dois sentidos e a origem registrada no cabeçalho do
+/// processo novo.
+#[derive(Default)]
+pub struct Universo<'a> {
+    pub por_numero: HashMap<String, &'a Value>,
+    por_hash: HashMap<String, String>,
+    citam: HashMap<String, Vec<String>>,
+    filhos: HashMap<String, Vec<String>>,
+}
+
+impl<'a> Universo<'a> {
+    pub fn novo(dets: impl IntoIterator<Item = &'a Value>) -> Self {
+        let mut u = Universo::default();
+        let mut ordem: Vec<String> = Vec::new();
+        for d in dets {
+            let n = num(d, "numero");
+            if n.is_empty() {
+                continue;
+            }
+            match u.por_numero.get(&n) {
+                Some(velho) if s(Some(velho), "coletado_em") > s(Some(d), "coletado_em") => {}
+                Some(_) => {
+                    u.por_numero.insert(n, d);
+                }
+                None => {
+                    ordem.push(n.clone());
+                    u.por_numero.insert(n, d);
+                }
+            }
+        }
+        for n in ordem {
+            let d = u.por_numero[&n];
+            let h = s(Some(d), "hash").to_uppercase();
+            if !h.is_empty() {
+                u.por_hash.insert(h, n.clone());
+            }
+            let pai = num(d, "pai");
+            if !pai.is_empty() {
+                u.filhos.entry(pai).or_default().push(n.clone());
+            }
+            for c in d
+                .get("citados")
+                .and_then(Value::as_array)
+                .map(|v| v.as_slice())
+                .unwrap_or_default()
+            {
+                for k in [s(Some(c), "numero"), s(Some(c), "hash").to_uppercase()] {
+                    if !k.is_empty() {
+                        let v = u.citam.entry(k).or_default();
+                        if !v.contains(&n) {
+                            v.push(n.clone());
+                        }
+                    }
+                }
+            }
+        }
+        u
+    }
+
+    /// Pelo número; sem ele (ou sem processo aberto com ele), pelo hash do link.
+    pub fn achar(&self, citado: &Value) -> Option<&'a Value> {
+        let n = s(Some(citado), "numero");
+        self.por_numero.get(&n).copied().or_else(|| {
+            let h = s(Some(citado), "hash").to_uppercase();
+            if h.is_empty() {
+                return None;
+            }
+            self.por_hash
+                .get(&h)
+                .and_then(|n| self.por_numero.get(n).copied())
+        })
+    }
+}
+
+/// Um processo que cita este, ou que este cita, conta como o novo processo
+/// dele quando a emissão não foi a normal ("a partir deste documento"): é
+/// Proc. Administrativo, não tem outra origem registrada, foi emitido depois
+/// deste e está adiante na família da licitação (Elaboração → Fase
+/// Preparatória → Abertura). Assim ficam de fora o pagamento ou o contrato
+/// que citam o número da licitação, o processo semelhante citado como
+/// referência e o processo antigo.
+pub fn aceita_mencao(det: &Value, outro: &Value) -> bool {
+    let (n, n_outro) = (num(det, "numero"), num(outro, "numero"));
+    if n_outro.is_empty() || n_outro == n || !eh_processo(&s(Some(outro), "tipo_doc")) {
+        return false;
+    }
+    let pai = num(outro, "pai");
+    if !pai.is_empty() && pai != n {
+        return false;
+    }
+    if let (Some(em), Some(em_outro)) = (
+        de_iso(&s(Some(det), "emissao")),
+        de_iso(&s(Some(outro), "emissao")),
+    ) && em_outro < em
+    {
+        return false;
+    }
+    match (familia_det(det), familia_det(outro)) {
+        (_, None) => false,
+        (None, Some(_)) => true,
+        (Some(f), Some(f_outro)) => f_outro > f,
+    }
+}
+
+/// Novos processos deste, do mais antigo ao mais recente, cada um com os
+/// vínculos que o acharam:
+///   - emissão: evento "emitiu o Proc. Administrativo N/AAAA a partir deste
+///     documento" (data do evento);
+///   - origem: o processo novo traz este no cabeçalho de origem, sem o evento aqui;
+///   - citado neste / cita este: emissão fora do normal, achada pela menção
+///     num sentido ou no outro (`aceita_mencao`); a data é a de emissão do
+///     processo novo.
+///
+/// Origem e menções precisam do `uni`; `mencoes = false` fica só com
+/// emissão e origem. Detalhe gravado no cache antes da leitura das emissões
+/// só tem os números ("derivados"): entram sem data.
+pub fn novos_processos(det: Option<&Value>, uni: Option<&Universo>, mencoes: bool) -> Vec<Novo> {
     let mut novos: Vec<Novo> = match det.and_then(|d| d.get("emissoes")) {
         Some(e) => e
             .as_array()
@@ -62,6 +219,8 @@ pub fn novos_processos(det: Option<&Value>) -> Vec<Novo> {
                 autor: s(Some(e), "autor"),
                 setor: s(Some(e), "setor"),
                 url: s(Some(e), "url"),
+                vinculos: vec![V_EMISSAO],
+                etapa: String::new(),
             })
             .collect(),
         None => det
@@ -73,12 +232,97 @@ pub fn novos_processos(det: Option<&Value>) -> Vec<Novo> {
             .filter_map(Value::as_str)
             .map(|n| Novo {
                 numero: n.to_string(),
+                vinculos: vec![V_EMISSAO],
                 ..Default::default()
             })
             .collect(),
     };
+    let proprio = det.map(|d| num(d, "numero")).unwrap_or_default();
+    if let (Some(det), Some(uni)) = (det, uni)
+        && !proprio.is_empty()
+    {
+        let mut add = |outro: &Value, vinculo: &'static str| {
+            let n = num(outro, "numero");
+            if let Some(x) = novos.iter_mut().find(|x| x.numero == n) {
+                // vínculo normal (emissão/origem) já basta; menções só se somam entre si
+                let normal = x.vinculos.iter().any(|v| *v == V_EMISSAO || *v == V_ORIGEM);
+                if !normal && !x.vinculos.contains(&vinculo) {
+                    x.vinculos.push(vinculo);
+                }
+                return;
+            }
+            novos.push(Novo {
+                numero: n,
+                data: de_iso(&s(Some(outro), "emissao")),
+                url: s(Some(outro), "url"),
+                vinculos: vec![vinculo],
+                ..Default::default()
+            });
+        };
+        for n in uni
+            .filhos
+            .get(&proprio)
+            .map(|v| v.as_slice())
+            .unwrap_or_default()
+        {
+            let outro = uni.por_numero[n];
+            if *n != proprio && eh_processo(&s(Some(outro), "tipo_doc")) {
+                add(outro, V_ORIGEM);
+            }
+        }
+        if mencoes {
+            for c in det
+                .get("citados")
+                .and_then(Value::as_array)
+                .map(|v| v.as_slice())
+                .unwrap_or_default()
+            {
+                if let Some(outro) = uni.achar(c)
+                    && aceita_mencao(det, outro)
+                {
+                    add(outro, V_CITADO);
+                }
+            }
+            let mut chaves = vec![proprio.clone()];
+            let h = s(Some(det), "hash").to_uppercase();
+            if !h.is_empty() {
+                chaves.push(h);
+            }
+            let mut vistos: Vec<&String> = Vec::new();
+            for k in &chaves {
+                for n in uni.citam.get(k).map(|v| v.as_slice()).unwrap_or_default() {
+                    if vistos.contains(&n) {
+                        continue;
+                    }
+                    vistos.push(n);
+                    let outro = uni.por_numero[n];
+                    if aceita_mencao(det, outro) {
+                        add(outro, V_CITA);
+                    }
+                }
+            }
+        }
+        for n in &mut novos {
+            // etapa do novo processo, quando ele foi aberto
+            if let Some(outro) = uni.por_numero.get(&n.numero) {
+                n.etapa = s(Some(outro), "etapa");
+                if n.url.is_empty() {
+                    n.url = s(Some(outro), "url");
+                }
+            }
+        }
+    }
     novos.sort_by_key(|n| n.data.unwrap_or(NaiveDateTime::MIN));
     novos
+}
+
+/// "40.001/2026 (emissão), 39.144/2026 (cita este)" para a coluna do Resultado.
+pub fn texto_novos(novos: &[Novo]) -> String {
+    novos
+        .iter()
+        .map(|n| format!("{} ({})", n.numero, n.vinculos.join(" + ")))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// O registro de um processo (o dict `r` do `consolidar`).
@@ -111,6 +355,7 @@ pub struct Registro {
     pub pai: String,
     pub derivados: String,
     pub novos: Vec<Novo>,
+    pub novos_texto: String,
     /// o mais recente; com o filtro de período, o mais recente dentro dele
     pub novo_processo_em: Option<NaiveDateTime>,
     pub caixa: String,
@@ -173,6 +418,7 @@ impl Registro {
             "pai" => t(&self.pai),
             "derivados" => t(&self.derivados),
             "novo_processo_em" => d(self.novo_processo_em),
+            "novos_texto" => t(&self.novos_texto),
             "caixa" => t(&self.caixa),
             "tem_detalhe" => Campo::Bool(self.tem_detalhe),
             "etapa_meu_setor" => b(self.etapa_meu_setor),
@@ -253,6 +499,7 @@ pub fn consolidar(
     det: Option<&Value>,
     agora: NaiveDateTime,
     op: &Opcoes,
+    uni: Option<&Universo>,
 ) -> Registro {
     let item = item.filter(|v| v.is_object());
     let det = det.filter(|v| v.as_object().is_some_and(|o| !o.is_empty()));
@@ -328,7 +575,7 @@ pub fn consolidar(
         status_setor: s(det, "status_setor"),
         pai: s(det, "pai"),
         derivados: lista_s(det, "derivados").join(", "),
-        novos: novos_processos(det),
+        novos: novos_processos(det, uni, !op.a.sem_mencoes),
         caixa: s(item, "caixa"),
         transicoes: trans,
         despachos: desp.clone(),
@@ -347,6 +594,7 @@ pub fn consolidar(
         None
     };
     r.novo_processo_em = r.novos.iter().filter_map(|n| n.data).max();
+    r.novos_texto = texto_novos(&r.novos);
     r.dias_etapa = r.entrada.map(|e| (agora.date() - e.date()).num_days());
     r.dias_sem_mov = r.ult_mov.map(|e| (agora.date() - e.date()).num_days());
     let mud: Vec<&Transicao> = r.transicoes.iter().filter(|t| !t.mesma_etapa).collect();
@@ -389,6 +637,8 @@ pub struct Filtro {
     /// "lista" (avaliável só com a listagem) | "detalhe"
     pub fonte: &'static str,
     pub pred: Pred,
+    /// filtro de novo processo (a busca completa as menções antes de aplicá-lo)
+    pub novo: bool,
 }
 
 fn periodo(de: Option<NaiveDateTime>, ate: Option<NaiveDateTime>) -> String {
@@ -411,13 +661,24 @@ fn no_intervalo(
 
 pub fn montar_filtros(op: &Opcoes) -> Vec<Filtro> {
     let a = &op.a;
-    let mut f: Vec<Filtro> = Vec::new();
-    let mut add = |descricao: String, grupo: &'static str, fonte: &'static str, pred: Pred| {
-        f.push(Filtro {
+    let f: RefCell<Vec<Filtro>> = RefCell::new(Vec::new());
+    let add = |descricao: String, grupo: &'static str, fonte: &'static str, pred: Pred| {
+        f.borrow_mut().push(Filtro {
             descricao,
             grupo,
             fonte,
             pred,
+            novo: false,
+        })
+    };
+    // filtro de novo processo: a busca completa as menções antes de aplicá-lo
+    let add_novo = |descricao: String, pred: Pred| {
+        f.borrow_mut().push(Filtro {
+            descricao,
+            grupo: "geral",
+            fonte: "detalhe",
+            pred,
+            novo: true,
         })
     };
     let exata = a.etapa_exata;
@@ -591,10 +852,11 @@ pub fn montar_filtros(op: &Opcoes) -> Vec<Filtro> {
         if com_periodo {
             desc.push_str(&format!(" {}", periodo(de, ate)));
         }
-        add(
+        if !a.sem_mencoes {
+            desc.push_str(" (emissão normal ou menção)");
+        }
+        add_novo(
             desc,
-            "geral",
-            "detalhe",
             Box::new(move |r| {
                 r.novos_periodo = r
                     .novos
@@ -615,10 +877,15 @@ pub fn montar_filtros(op: &Opcoes) -> Vec<Filtro> {
         );
     }
     if a.sem_novo_processo {
-        add(
-            "não emitiu novo processo a partir dele".into(),
-            "geral",
-            "detalhe",
+        add_novo(
+            format!(
+                "não emitiu novo processo a partir dele{}",
+                if a.sem_mencoes {
+                    ""
+                } else {
+                    " (nem por emissão normal nem por menção)"
+                }
+            ),
             Box::new(|r| r.novos.is_empty()),
         );
     }
@@ -719,13 +986,23 @@ pub fn montar_filtros(op: &Opcoes) -> Vec<Filtro> {
             Box::new(|r| r.cita_alvo == Some(true)),
         );
     }
-    f
+    f.into_inner()
 }
 
 pub fn avaliar(r: &mut Registro, filtros: &[Filtro], excecao: bool, so_lista: bool) -> bool {
+    avaliar_se(r, filtros, excecao, |f| !so_lista || f.fonte == "lista")
+}
+
+/// Como `avaliar`, só com os filtros em que `usar(f)`.
+pub fn avaliar_se(
+    r: &mut Registro,
+    filtros: &[Filtro],
+    excecao: bool,
+    usar: impl Fn(&Filtro) -> bool,
+) -> bool {
     let mut reprovou_posicao = false;
     for f in filtros {
-        if so_lista && f.fonte != "lista" {
+        if !usar(f) {
             continue;
         }
         if !(f.pred)(r) {

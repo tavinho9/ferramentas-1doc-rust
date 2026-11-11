@@ -12,7 +12,7 @@ use crate::planilha::xl;
 use crate::texto::corta;
 use crate::{msg, paralelo, re};
 
-pub const COLUNAS: [(&str, &str, f64); 27] = [
+pub const COLUNAS: [(&str, &str, f64); 28] = [
     ("Nº Processo", "numero", 13.0),
     ("Emissão", "emissao", 16.0),
     ("Prioridade", "prioridade", 10.0),
@@ -38,6 +38,7 @@ pub const COLUNAS: [(&str, &str, f64); 27] = [
     ("Processo de origem", "pai", 13.0),
     ("Processos derivados", "derivados", 16.0),
     ("Novo processo emitido em", "novo_processo_em", 17.0),
+    ("Novos processos (vínculo)", "novos_texto", 30.0),
     ("Setores envolvidos (caixa)", "para", 34.0),
     ("Caixa", "caixa", 14.0),
 ];
@@ -224,13 +225,15 @@ pub fn escrever_xlsx(
         ("Nº Processo", "numero", 13.0),
         ("Objeto", "assunto", 45.0),
         ("Novo processo", "novo", 13.0),
+        ("Vínculo", "vinculo", 16.0),
         ("Emitido em", "data", 17.0),
         ("Autor", "autor", 24.0),
         ("Setor", "setor", 18.0),
         ("Etapa atual do processo", "etapa_atual", 26.0),
+        ("Etapa do novo processo", "etapa", 26.0),
     ];
     if marcar_novo {
-        ncols.insert(4, ("No período filtrado?", "no_periodo", 11.0));
+        ncols.insert(5, ("No período filtrado?", "no_periodo", 11.0));
     }
     let wn = wb.add_worksheet();
     wn.set_name("Novos processos").map_err(xl)?;
@@ -247,10 +250,12 @@ pub fn escrever_xlsx(
                     "numero" => Campo::Texto(r.numero.clone()),
                     "assunto" => Campo::Texto(r.assunto.clone()),
                     "novo" => Campo::Texto(n.numero.clone()),
+                    "vinculo" => Campo::Texto(n.vinculos.join(" + ")),
                     "data" => n.data.map(Campo::Data).unwrap_or(Campo::Nada),
                     "autor" => Campo::Texto(n.autor.clone()),
                     "setor" => Campo::Texto(n.setor.clone()),
                     "etapa_atual" => Campo::Texto(r.etapa.clone()),
+                    "etapa" => Campo::Texto(n.etapa.clone()),
                     _ => Campo::Texto(
                         if r.novos_periodo.contains(&ni) {
                             "sim"

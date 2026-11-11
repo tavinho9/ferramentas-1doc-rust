@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use chrono::{Local, NaiveDate, TimeZone};
+use chrono::{Local, NaiveDate, NaiveDateTime, TimeZone};
 use ferramentas1doc::saida::Saida;
 use ferramentas1doc::sessao::Credenciais;
 use ferramentas1doc::{Ambiente, config};
@@ -72,8 +72,83 @@ pub fn painel() -> String {
     )
 }
 
+pub const ABERTURA: &str = "Abertura de Procedimento Licitatório";
+pub const FASE_PREP: &str = "Fase Preparatória de Procedimento Licitatório";
+
+fn id_assunto(assunto: &str) -> &'static str {
+    match assunto {
+        ABERTURA => "961721",
+        FASE_PREP => "962809",
+        _ => "1",
+    }
+}
+
+/// Um processo a mais, para as menções entre processos: assunto, emissão (no
+/// horário de Brasília), caixa (None = fora das caixas, só abre pelo link ou
+/// pelo número), processo de origem no cabeçalho ((número, hash)) e o HTML do
+/// texto do despacho.
+#[derive(Clone)]
+pub struct Outro {
+    pub hash: &'static str,
+    pub numero: &'static str,
+    pub objeto: &'static str,
+    pub assunto: &'static str,
+    pub etapas: Vec<(&'static str, &'static str, bool)>,
+    pub emissao: NaiveDateTime,
+    pub caixa: Option<&'static str>,
+    pub pai: Option<(&'static str, &'static str)>,
+    pub despacho: &'static str,
+}
+
+fn carimbo_br(t: NaiveDateTime) -> i64 {
+    t.and_local_timezone(chrono::FixedOffset::west_opt(3 * 3600).unwrap())
+        .unwrap()
+        .timestamp()
+}
+
+impl Outro {
+    pub fn linha(&self) -> String {
+        linha_de(
+            self.hash,
+            self.numero,
+            self.objeto,
+            "Alta",
+            self.assunto,
+            &self.emissao.format("%d/%m/%Y %H:%M").to_string(),
+        )
+    }
+
+    pub fn detalhe(&self) -> String {
+        pagina_detalhe(&Detalhe {
+            numero: self.numero,
+            hash: self.hash,
+            prioridade: "Alta",
+            objeto: self.objeto,
+            descricao: self.objeto,
+            assunto: self.assunto,
+            etapas: &self.etapas,
+            mk: carimbo_br(self.emissao),
+            pai: self.pai,
+            despacho: self.despacho,
+            eventos: "",
+        })
+    }
+}
+
 pub fn linha(p: &Processo) -> String {
+    linha_de(
+        p.hash,
+        p.numero,
+        p.objeto,
+        p.prioridade,
+        ABERTURA,
+        &emissao(),
+    )
+}
+
+fn linha_de(h: &str, num: &str, obj: &str, pri: &str, assunto: &str, em: &str) -> String {
     let hoje = hoje().format("%d/%m/%Y");
+    let curto: String = assunto.chars().take(12).collect();
     format!(
         r#"<tr>
 <td><a class="link_emissao_a" href="./?pg=doc/ver&hash={h}&itd=3&origem=painel_setor">Proc.
@@ -82,40 +157,56 @@ pub fn linha(p: &Processo) -> String {
   <span class="pp" data-content="Maria da Silva">Maria S.</span></div></td>
 <td class="link_emissao td ignora normal celula_para"><span class="badge">SPOT-DCL-GP-CPPFI</span></td>
 <td class="link_emissao td ignora normal">{obj}
-  <span class="badge" title="Abertura de Procedimento Licitatório">Abertura de Proc...</span>
+  <span class="badge" title="{assunto}">{curto}...</span>
   <div class="resumo">resumo do processo</div>
   <span class="label" title="Prioridade">{pri}</span></td>
 <td><small class="tt data" title="Última movimentação em {hoje} 10:00:00">2 horas</small></td>
-</tr>"#,
-        h = p.hash,
-        num = p.numero,
-        em = emissao(),
-        obj = p.objeto,
-        pri = p.prioridade
+</tr>"#
     )
 }
 
 pub fn listagem(caixa: &str, pagina: u32) -> String {
-    let linhas: String = if caixa == "entrada" && pagina == 1 {
+    listagem_com(caixa, pagina, &[])
+}
+
+/// P1 e P2 ficam em Em aberto; os `outros`, na caixa de cada um.
+pub fn listagem_com(caixa: &str, pagina: u32, outros: &[Outro]) -> String {
+    let mut da_caixa: Vec<String> = if caixa == "entrada" {
         PROCESSOS.iter().map(linha).collect()
+    } else {
+        Vec::new()
+    };
+    da_caixa.extend(
+        outros
+            .iter()
+            .filter(|o| o.caixa == Some(caixa))
+            .map(Outro::linha),
+    );
+    let n = da_caixa.len();
+    let linhas: String = if pagina == 1 {
+        da_caixa.concat()
     } else {
         String::new()
     };
-    let n = if caixa == "entrada" {
-        PROCESSOS.len()
+    let navega = if n > 0 {
+        r#"<div class="navega_caixa">Página 1/1</div>"#
     } else {
-        0
+        ""
     };
     format!(
-        r#"<div class="navega_caixa">Página 1/1</div>
+        r#"{navega}
 <table class="table">{linhas}</table>
 <script>$('#num_tab_{caixa}').html('({n})')</script>"#
     )
 }
 
 pub fn kanban(p: &Processo, modelo: bool) -> String {
+    kanban_de(&p.etapas, modelo)
+}
+
+pub fn kanban_de(etapas: &[(&str, &str, bool)], modelo: bool) -> String {
     let mut blocos = String::new();
-    for (nome, marca, atual) in p.etapas {
+    for &(nome, marca, atual) in etapas {
         let marca = if modelo {
             if atual {
                 "Aqui há alguns segundos"
@@ -173,24 +264,64 @@ pub fn detalhe(p: &Processo) -> String {
 
 /// Página do processo com `eventos` (HTML) a mais na linha do tempo.
 pub fn detalhe_com(p: &Processo, eventos: &str) -> String {
-    let h = hoje();
     let mk = Local
-        .from_local_datetime(&h.and_hms_opt(9, 15, 0).unwrap())
+        .from_local_datetime(&hoje().and_hms_opt(9, 15, 0).unwrap())
         .earliest()
         .map(|d| d.timestamp())
         .unwrap_or(0);
-    let hoje = h.format("%d/%m/%Y");
+    pagina_detalhe(&Detalhe {
+        numero: p.numero,
+        hash: p.hash,
+        prioridade: p.prioridade,
+        objeto: p.objeto,
+        descricao: p.descricao,
+        assunto: ABERTURA,
+        etapas: &p.etapas,
+        mk,
+        pai: None,
+        despacho: "Encaminho para análise.",
+        eventos,
+    })
+}
+
+/// Os campos da página do processo.
+pub struct Detalhe<'a> {
+    pub numero: &'a str,
+    pub hash: &'a str,
+    pub prioridade: &'a str,
+    pub objeto: &'a str,
+    pub descricao: &'a str,
+    pub assunto: &'a str,
+    pub etapas: &'a [(&'a str, &'a str, bool)],
+    pub mk: i64,
+    pub pai: Option<(&'a str, &'a str)>,
+    pub despacho: &'a str,
+    pub eventos: &'a str,
+}
+
+pub fn pagina_detalhe(d: &Detalhe) -> String {
+    let hoje = hoje().format("%d/%m/%Y");
+    let pai = d
+        .pai
+        .map(|(n, h)| {
+            format!(
+                r#"<h2 class="tt pull-left emission_infos_item_from" title="Emitido a partir de"><a class="nd" href="./?pg=doc/ver&itd=3&hash={h}&origem=base">Proc. Administrativo <small>{n}</small></a></h2>"#
+            )
+        })
+        .unwrap_or_default();
+    let curto: String = d.assunto.chars().take(12).collect();
     format!(
         r#"<html><body>{LOGADO}
 <input type="hidden" id="nome_em" value="Proc. Administrativo {num}">
 <input type="hidden" id="hash_emissao" value="{hash}">
 <input type="hidden" id="id_setor_origem" value="12">
 <div id="emissao_principal" data-datamk="{mk}">
+  {pai}
   <h2 class="tt pull-left emission_infos_item_atual"><span class="nd">Proc. Administrativo</span>
     <small class="nd_num">{num}</small> <span class="label" title="Prioridade">{pri}</span></h2>
-  <h4 class="tit tit_assunto" data-id_assunto="961721">{obj}
-    <span class="badge" title="Assunto: Abertura de Procedimento Licitatório">Abertura de Proc...</span></h4>
-  <a class="ir_quadro">Ir ao quadro: Abertura de Procedimento Licitatório</a>
+  <h4 class="tit tit_assunto" data-id_assunto="{id}">{obj}
+    <span class="badge" title="Assunto: {assunto}">{curto}...</span></h4>
+  <a class="ir_quadro">Ir ao quadro: {assunto}</a>
   {kanban}
   <div id="campo_adicional_descricao_objeto"><div class="cp">
     <span data-valor="{desc}">Objeto<span>*</span>:</span><small>{desc}</small></div></div>
@@ -201,18 +332,23 @@ pub fn detalhe_com(p: &Processo, eventos: &str) -> String {
   <abbr class="despacho_data" title="Em {hoje} 10:00">hoje</abbr>
   <div class="rf_header"><strong>Despacho 1</strong></div>
   <div class="rf_de"><span class="badge_env">SS-DAF</span></div>
-</th></tr><tr><td class="celula_despacho"><div class="texto_original">Encaminho para análise.</div></td></tr>
+</th></tr><tr><td class="celula_despacho"><div class="texto_original fr-view">{despacho}</div></td></tr>
 </table></div>
 {eventos}
 <div class="tm_conteudo"><div id="parent_wa" data-current_idph="1">{modelo}</div></div>
 </body></html>"#,
-        num = p.numero,
-        hash = p.hash,
-        pri = p.prioridade,
-        obj = p.objeto,
-        desc = p.descricao,
-        kanban = kanban(p, false),
-        modelo = kanban(p, true),
+        num = d.numero,
+        hash = d.hash,
+        mk = d.mk,
+        pri = d.prioridade,
+        obj = d.objeto,
+        desc = d.descricao,
+        assunto = d.assunto,
+        id = id_assunto(d.assunto),
+        despacho = d.despacho,
+        eventos = d.eventos,
+        kanban = kanban_de(d.etapas, false),
+        modelo = kanban_de(d.etapas, true),
     )
 }
 
@@ -280,6 +416,12 @@ impl Fake1Doc {
 
     /// Com um manipulador próprio, consultado antes das rotas padrão.
     pub fn com(extra: Option<Box<Manipulador>>) -> Self {
+        Self::com_outros(extra, Vec::new())
+    }
+
+    /// Com processos a mais (`Outro`), na caixa de cada um, abertos pelo hash e
+    /// localizados pelo número.
+    pub fn com_outros(extra: Option<Box<Manipulador>>, outros: Vec<Outro>) -> Self {
         let servidor = Arc::new(tiny_http::Server::http("127.0.0.1:0").unwrap());
         let porta = servidor.server_addr().to_ip().unwrap().port();
         let fake = Fake1Doc {
@@ -295,6 +437,7 @@ impl Fake1Doc {
             fake.intervalos.clone(),
         );
         let extra: Arc<Option<Box<Manipulador>>> = Arc::new(extra);
+        let outros = Arc::new(outros);
         std::thread::spawn(move || {
             for mut req in servidor.incoming_requests() {
                 let url = req.url().to_string();
@@ -311,7 +454,9 @@ impl Fake1Doc {
                 let r = (*extra)
                     .as_ref()
                     .and_then(|f| f(&pedido))
-                    .unwrap_or_else(|| rotear(&pedido, logado.load(Ordering::SeqCst), &intervalos));
+                    .unwrap_or_else(|| {
+                        rotear(&pedido, logado.load(Ordering::SeqCst), &intervalos, &outros)
+                    });
                 let mut resp = tiny_http::Response::from_string(r.corpo)
                     .with_status_code(r.status)
                     .with_header(
@@ -352,7 +497,12 @@ impl Drop for Fake1Doc {
     }
 }
 
-fn rotear(p: &Pedido, logado: bool, intervalos: &Mutex<Vec<Option<String>>>) -> Resposta {
+fn rotear(
+    p: &Pedido,
+    logado: bool,
+    intervalos: &Mutex<Vec<Option<String>>>,
+    outros: &[Outro],
+) -> Resposta {
     if !logado {
         return Resposta::html(TELA_LOGIN);
     }
@@ -363,11 +513,21 @@ fn rotear(p: &Pedido, logado: bool, intervalos: &Mutex<Vec<Option<String>>>) -> 
             p.corpo.get("ano").cloned().unwrap_or_default()
         )
         .replace('.', "");
-        return match PROCESSOS.iter().find(|x| x.numero.replace('.', "") == num) {
-            Some(x) => Resposta {
+        let hash = PROCESSOS
+            .iter()
+            .find(|x| x.numero.replace('.', "") == num)
+            .map(|x| x.hash)
+            .or_else(|| {
+                outros
+                    .iter()
+                    .find(|x| x.numero.replace('.', "") == num)
+                    .map(|x| x.hash)
+            });
+        return match hash {
+            Some(h) => Resposta {
                 status: 302,
                 corpo: String::new(),
-                location: Some(format!("/?pg=doc/ver&hash={}&itd=3", x.hash)),
+                location: Some(format!("/?pg=doc/ver&hash={h}&itd=3")),
             },
             None => Resposta::html("<html></html>"),
         };
@@ -382,9 +542,10 @@ fn rotear(p: &Pedido, logado: bool, intervalos: &Mutex<Vec<Option<String>>>) -> 
             .get("num_pagina")
             .and_then(|n| n.parse().ok())
             .unwrap_or(1);
-        return Resposta::html(listagem(
+        return Resposta::html(listagem_com(
             p.query.get("caixa").map(String::as_str).unwrap_or(""),
             pagina,
+            outros,
         ));
     }
     if p.query.get("pg").map(String::as_str) == Some("doc/ver") {
@@ -394,8 +555,11 @@ fn rotear(p: &Pedido, logado: bool, intervalos: &Mutex<Vec<Option<String>>>) -> 
             .cloned()
             .unwrap_or_default()
             .to_uppercase();
-        return match PROCESSOS.iter().find(|x| x.hash == h) {
-            Some(x) => Resposta::html(detalhe(x)),
+        if let Some(x) = PROCESSOS.iter().find(|x| x.hash == h) {
+            return Resposta::html(detalhe(x));
+        }
+        return match outros.iter().find(|x| x.hash == h) {
+            Some(x) => Resposta::html(x.detalhe()),
             None => Resposta {
                 status: 404,
                 corpo: "não encontrado".into(),

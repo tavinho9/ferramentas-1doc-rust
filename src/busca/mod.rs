@@ -13,6 +13,10 @@
 //!    eles, o rótulo dos despachos "via etapa", conferido contra o quadro.
 //! 5. Novo processo — os eventos "emitiu o Proc. Administrativo N/AAAA a
 //!    partir deste documento" dizem que processos saíram deste e quando.
+//!    Como a emissão nem sempre é a normal, contam também as menções entre
+//!    os processos (este cita o novo, ou o novo cita este) e a origem no
+//!    cabeçalho do processo novo; com o filtro de novo processo, a busca lê
+//!    os processos da licitação de todas as caixas para achá-las.
 //! 6. Filtros e saída — .xlsx com abas Resultado, Transições, Novos
 //!    processos e Parâmetros (CSV opcional) e um resumo.
 
@@ -23,7 +27,7 @@ pub mod saida;
 
 use std::path::{Path, PathBuf};
 
-use chrono::NaiveDateTime;
+use chrono::{Datelike, NaiveDate, NaiveDateTime};
 use serde_json::{Map, Value, json};
 
 use crate::ambiente::Ambiente;
@@ -35,7 +39,7 @@ use crate::{arquivos, config, html, msg, msg_sem_quebra};
 pub use args::{Analise, Args, Opcoes};
 use parse::{VERSAO, de_iso, iso};
 pub use registro::Registro;
-use registro::{Filtro, avaliar, consolidar, montar_filtros, ordenar};
+use registro::{Filtro, Universo, avaliar, avaliar_se, consolidar, montar_filtros, ordenar};
 pub use saida::Falha;
 
 pub const CAIXAS: [(&str, &str); 4] = [
@@ -326,9 +330,10 @@ fn listar(
     cli: &Cliente1Doc,
     caixas: &[String],
     itds: &[String],
-    op: &Opcoes,
+    de: Option<NaiveDateTime>,
+    ate: Option<NaiveDateTime>,
+    max_paginas: i64,
 ) -> Res<Listagem> {
-    let (de, ate, max_paginas) = (op.emissao_de, op.emissao_ate, op.a.max_paginas);
     let (mut lista, mut por_caixa, mut avisos) = (Map::new(), Vec::new(), Vec::new());
     for cx in caixas {
         let rot = rotulo_caixa(cx);
@@ -429,6 +434,12 @@ fn listar(
     Ok((lista, por_caixa, avisos))
 }
 
+/// Como a falha de um processo citado só por link aparece ("link 65EDAAAA00…").
+fn rotulo_link(hash: &str) -> String {
+    format!("link {}…", hash.chars().take(10).collect::<String>())
+}
+
+/// `numero` vazio: processo citado só por link (hash); vale o número que a página mostrar.
 fn detalhar_um(
     cli: &Cliente1Doc,
     numero: &str,
@@ -443,6 +454,23 @@ fn detalhar_um(
         cli.processo_por_hash(&h, itd)?
     };
     let mut det = parse::parse_detalhe(&pagina, agora)?;
+    let numero = if numero.is_empty() {
+        let n = s(&det, "numero");
+        if n.is_empty() {
+            return Ok((
+                None,
+                Some(Falha {
+                    numero: rotulo_link(&h),
+                    motivo: "página sem número de processo".into(),
+                    obtido: String::new(),
+                }),
+            ));
+        }
+        n
+    } else {
+        numero.to_string()
+    };
+    let numero = numero.as_str();
     if s(&det, "numero") != numero && !h.is_empty() {
         // hash velho: tenta pelo número
         det = parse::parse_detalhe(&cli.processo_por_numero(numero, itd)?, agora)?;
@@ -529,7 +557,11 @@ fn detalhar(
                 Err(e) => Ok((
                     None,
                     Some(Falha {
-                        numero: p.0.clone(),
+                        numero: if p.0.is_empty() {
+                            rotulo_link(&p.2.as_ref().map(|i| s(i, "hash")).unwrap_or_default())
+                        } else {
+                            p.0.clone()
+                        },
                         motivo: "exceção".into(),
                         obtido: corta(&e.to_string(), 120),
                     }),
@@ -543,7 +575,7 @@ fn detalhar(
             |i, (det, falha)| {
                 let p = &pedidos[i];
                 if let Some(d) = det {
-                    dets.insert(chave(&p.0, &p.1), d);
+                    dets.insert(chave(&s(&d, "numero"), &p.1), d);
                     feitos += 1;
                 } else if let Some(f) = falha {
                     falhas_rodada.push((p.clone(), f));
@@ -575,6 +607,268 @@ pub struct Resultado {
     pub params: Vec<(String, String)>,
     pub filtros: Vec<Filtro>,
     pub arquivo: Option<PathBuf>,
+}
+
+/// Ano do número N/AAAA (0 se não for número).
+fn ano(numero: &str) -> i32 {
+    parse::norm_numero(numero)
+        .and_then(|n| n.split_once('/').and_then(|(_, a)| a.parse().ok()))
+        .unwrap_or(0)
+}
+
+/// Antes do filtro de novo processo, abre o que falta para cruzar as menções
+/// (a emissão nem sempre é a normal, "a partir deste documento"):
+///   1. índice das caixas do setor (Em aberto, Saída, Arquivados, Favoritos):
+///      os processos da família da licitação emitidos desde o mais antigo dos
+///      processos de origem. É deles que vem o "cita este" (o processo novo
+///      cita o de origem) e a origem no cabeçalho;
+///   2. os processos que os de origem citam e que ainda não foram abertos
+///      ("citado neste").
+///
+/// Processo de origem = detalhado que passa nos demais filtros. O que for
+/// aberto fica no cache (detalhe completo), e só é reaberto quando a última
+/// movimentação muda. Devolve o resumo para a aba Parâmetros.
+#[allow(clippy::too_many_arguments)]
+fn completar_mencoes(
+    amb: &Ambiente,
+    op: &Opcoes,
+    cli: &Cliente1Doc,
+    cache: &mut Map<String, Value>,
+    arq_cache: &Path,
+    dets: &Map<String, Value>,
+    lista: &Map<String, Value>,
+    lista_completa: bool,
+    candidatos: &[String],
+    filtros: &[Filtro],
+    agora: NaiveDateTime,
+    itds: &[String],
+) -> Res<String> {
+    let a = &op.a;
+    let excecao = a.excecao_cita_setor.is_some();
+    let mut origens: Vec<&Value> = Vec::new();
+    for k in candidatos {
+        if let Some(d) = dets.get(k) {
+            let mut r = consolidar(lista.get(k), Some(d), agora, op, None);
+            if avaliar_se(&mut r, filtros, excecao, |f| !f.novo) {
+                origens.push(d);
+            }
+        }
+    }
+    let Some(desde) = origens
+        .iter()
+        .map(|d| {
+            de_iso(&s(d, "emissao")).unwrap_or_else(|| {
+                let a = match ano(&s(d, "numero")) {
+                    0 => agora.year(),
+                    x => x,
+                };
+                NaiveDate::from_ymd_opt(a, 1, 1)
+                    .unwrap_or(agora.date())
+                    .and_time(chrono::NaiveTime::MIN)
+            })
+        })
+        .min()
+    else {
+        return Ok("nenhum processo de origem a conferir".into());
+    };
+    let desde = desde.date().and_time(chrono::NaiveTime::MIN);
+
+    // 1. índice das caixas
+    let (indice, avisos) = if lista_completa {
+        // a listagem desta busca já leu todas as caixas, sem corte de emissão
+        let l: Map<String, Value> = lista
+            .iter()
+            .filter(|(_, v)| v.is_object() && de_iso(&s(v, "emissao")).is_none_or(|e| e >= desde))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        (l, Vec::new())
+    } else {
+        msg!(
+            amb,
+            "Índice de menções: todas as caixas, processos emitidos desde {}",
+            desde.format("%d/%m/%Y")
+        );
+        let todas: Vec<String> = CAIXAS.iter().map(|c| c.0.to_string()).collect();
+        let (l, _, av) = listar(amb, cli, &todas, itds, Some(desde), None, a.max_paginas)?;
+        for x in &av {
+            msg!(amb, "  Aviso: {x}");
+        }
+        (l, av)
+    };
+    let da_familia: Vec<(&String, &Value)> = indice
+        .iter()
+        .filter(|(_, it)| registro::familia(&s(it, "tipo")).is_some())
+        .collect();
+    let (mut pedidos, mut do_cache): (Vec<Pedido>, usize) = (Vec::new(), 0);
+    {
+        let dc = cache.get("det").and_then(Value::as_object);
+        for (k, it) in &da_familia {
+            let ult = s(it, "ult_mov");
+            let reaproveita = dets.contains_key(*k)
+                || dc
+                    .and_then(|d| d.get(*k))
+                    .filter(|c| arquivos::verdadeiro(c))
+                    .is_some_and(|c| {
+                        !a.refazer
+                            && c.get("citados").is_some()
+                            && !ult.is_empty()
+                            && s(c, "_ult_mov_lista") == ult
+                    });
+            if reaproveita {
+                do_cache += 1;
+                continue;
+            }
+            let (itd, num) = k.split_once('|').unwrap_or(("", k));
+            pedidos.push((num.to_string(), itd.to_string(), Some((*it).clone())));
+        }
+    }
+    let (mut n_abertos, mut falhas_idx) = (0usize, Vec::new());
+    if !pedidos.is_empty() {
+        msg!(
+            amb,
+            "Abrindo {} processo(s) do índice de menções; {do_cache} já aberto(s) ou no cache.",
+            pedidos.len()
+        );
+        let mut abertos = Map::new();
+        let r = detalhar(amb, cli, pedidos, agora, a.paralelo, &mut abertos);
+        n_abertos = abertos.len();
+        let dc = obj_mut(cache, "det");
+        for (k, v) in abertos {
+            dc.insert(k, v);
+        }
+        if !a.sem_cache {
+            salvar_cache(arq_cache, cache)?;
+        }
+        falhas_idx = r?;
+    }
+
+    // 2. citados pelos processos de origem que ainda não foram abertos
+    let descartados: Vec<String> = cache
+        .get("citados_descartados")
+        .and_then(Value::as_array)
+        .map(|v| {
+            v.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    if !cache.contains_key("citados_descartados") {
+        cache.insert("citados_descartados".into(), json!([]));
+    }
+    let mut abrir: Vec<(String, Pedido)> = Vec::new();
+    {
+        let det_cache = cache.get("det").and_then(Value::as_object);
+        let uni = Universo::novo(
+            det_cache
+                .into_iter()
+                .flat_map(|m| m.values())
+                .chain(dets.values()),
+        );
+        let itd0 = itds.first().cloned().unwrap_or_else(|| "3".into());
+        for d in &origens {
+            for c in d
+                .get("citados")
+                .and_then(Value::as_array)
+                .map(|v| v.as_slice())
+                .unwrap_or_default()
+            {
+                let (cn, ch) = (s(c, "numero"), s(c, "hash"));
+                let k = if cn.is_empty() {
+                    ch.clone()
+                } else {
+                    cn.clone()
+                };
+                if k.is_empty()
+                    || uni.achar(c).is_some()
+                    || descartados.contains(&k)
+                    || abrir.iter().any(|(x, _)| *x == k)
+                {
+                    continue;
+                }
+                if !cn.is_empty() && ano(&cn) < ano(&s(d, "numero")) {
+                    continue; // o processo novo não é de ano anterior ao de origem
+                }
+                let item = if ch.is_empty() {
+                    None
+                } else {
+                    Some(json!({"hash": ch}))
+                };
+                abrir.push((k, (cn, itd0.clone(), item)));
+            }
+        }
+    }
+    let mut n_citados = 0usize;
+    if !abrir.is_empty() {
+        msg!(
+            amb,
+            "Abrindo {} processo(s) citado(s) nos despachos.",
+            abrir.len()
+        );
+        let mut citados = Map::new();
+        let pedidos: Vec<Pedido> = abrir.iter().map(|(_, p)| p.clone()).collect();
+        let r = detalhar(amb, cli, pedidos, agora, a.paralelo, &mut citados);
+        n_citados = citados.len();
+        let dc = obj_mut(cache, "det");
+        for (k, v) in citados {
+            dc.insert(k, v);
+        }
+        // número que não abre, página sem quadro nem rótulo: não adianta reabrir
+        // na próxima busca (falha de rede, sim)
+        if let Ok(falhas_cit) = &r {
+            let ruins: Vec<&String> = falhas_cit
+                .iter()
+                .filter(|f| f.motivo != "exceção")
+                .map(|f| &f.numero)
+                .collect();
+            let mut todos = descartados.clone();
+            for (k, p) in &abrir {
+                let id = if p.0.is_empty() {
+                    rotulo_link(k)
+                } else {
+                    p.0.clone()
+                };
+                if ruins.contains(&&id) && !todos.contains(k) {
+                    todos.push(k.clone());
+                }
+            }
+            todos.sort();
+            cache.insert("citados_descartados".into(), json!(todos));
+        }
+        if !a.sem_cache {
+            salvar_cache(arq_cache, cache)?;
+        }
+        r?;
+    }
+    let falhou = if falhas_idx.is_empty() {
+        String::new()
+    } else {
+        format!(
+            ", {} falha(s): {}",
+            falhas_idx.len(),
+            falhas_idx
+                .iter()
+                .take(10)
+                .map(|f| f.numero.clone())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    let mut resumo = format!(
+        "índice das caixas: {} processo(s) da família da licitação emitidos desde {} ({n_abertos} aberto(s) agora{falhou}); citados nos despachos abertos agora: {n_citados}",
+        da_familia.len(),
+        desde.format("%d/%m/%Y")
+    );
+    if !avisos.is_empty() {
+        resumo.push_str(&format!("\nAVISOS do índice: {}", avisos.join("; ")));
+    }
+    if !falhas_idx.is_empty() {
+        msg!(
+            amb,
+            "  Aviso: {} processo(s) do índice de menções não abriram; a menção deles fica de fora.",
+            falhas_idx.len()
+        );
+    }
+    Ok(resumo)
 }
 
 fn caminho_cache(amb: &Ambiente, a: &Args) -> PathBuf {
@@ -687,7 +981,15 @@ pub fn executar(
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-        let (l, por_caixa, avisos) = listar(amb, cli, &caixas, &itds, op)?;
+        let (l, por_caixa, avisos) = listar(
+            amb,
+            cli,
+            &caixas,
+            &itds,
+            op.emissao_de,
+            op.emissao_ate,
+            a.max_paginas,
+        )?;
         for av in &avisos {
             msg!(amb, "  Aviso: {av}");
         }
@@ -731,7 +1033,7 @@ pub fn executar(
     let mut candidatos = Vec::new();
     for (k, item) in &lista {
         if item.is_object() && !s(item, "numero").is_empty() {
-            let mut r0 = consolidar(Some(item), None, agora, op);
+            let mut r0 = consolidar(Some(item), None, agora, op, None);
             if !avaliar(&mut r0, &filtros, false, true) {
                 continue;
             }
@@ -748,6 +1050,8 @@ pub fn executar(
     }
     let (mut dets, mut falhas, mut do_cache) = (Map::new(), Vec::new(), 0usize);
     let periodo_novo = op.novo_processo_de.is_some() || op.novo_processo_ate.is_some();
+    // Com o filtro de novo processo, as menções entre processos contam (a emissão nem sempre é a normal)
+    let mencoes = filtros.iter().any(|f| f.novo) && !a.sem_mencoes;
     if !a.sem_detalhe {
         let mut pedidos: Vec<Pedido> = Vec::new();
         let det_cache = cache
@@ -766,12 +1070,15 @@ pub fn executar(
                         .and_then(Value::as_array)
                         .is_some_and(|d| !d.is_empty())
             });
+            // Detalhe gravado antes de a busca ler as menções: reabre se o filtro precisa delas.
+            let sem_citados = mencoes && c.is_some_and(|c| c.get("citados").is_none());
             // Reaproveita só se a listagem é de agora e a última movimentação não mudou.
             let ult = item.map(|i| s(i, "ult_mov")).unwrap_or_default();
             let reaproveita = c.is_some()
                 && !a.refazer
                 && (a.offline
                     || (!sem_data_novo
+                        && !sem_citados
                         && lista_fresca
                         && item.is_some()
                         && !ult.is_empty()
@@ -781,6 +1088,13 @@ pub fn executar(
                 falhas.push(Falha {
                     numero,
                     motivo: "cache sem a data do novo processo (modo offline)".into(),
+                    obtido: String::new(),
+                });
+            } else if reaproveita && sem_citados {
+                let numero = k.split_once('|').map(|x| x.1).unwrap_or(k).to_string();
+                falhas.push(Falha {
+                    numero,
+                    motivo: "cache sem as menções a outros processos (modo offline)".into(),
                     obtido: String::new(),
                 });
             } else if reaproveita {
@@ -824,16 +1138,57 @@ pub fn executar(
         }
     }
 
+    // ---- novo processo: menções nos dois sentidos e origem no cabeçalho do processo novo ----
+    let resumo_mencoes = if !mencoes {
+        if a.sem_mencoes {
+            "não consideradas (--sem-mencoes)".to_string()
+        } else {
+            "sem o filtro de novo processo, só entre os processos já abertos (nesta busca ou no cache)"
+                .to_string()
+        }
+    } else if a.offline {
+        "modo offline: só entre os processos que estão no cache".to_string()
+    } else {
+        let cli = cli.ok_or_else(|| Erro::outro("sem sessão do 1Doc"))?;
+        let lista_completa = lista_fresca
+            && CAIXAS.iter().all(|c| caixas.iter().any(|x| x == c.0))
+            && op.emissao_de.is_none()
+            && op.emissao_ate.is_none();
+        completar_mencoes(
+            amb,
+            op,
+            cli,
+            &mut cache,
+            &arq_cache,
+            &dets,
+            &lista,
+            lista_completa,
+            &candidatos,
+            &filtros,
+            agora,
+            &itds_ordem,
+        )?
+    };
+
     // ---- filtros finais ----
     let excecao = a.excecao_cita_setor.is_some();
     let mut regs = Vec::new();
-    for k in &candidatos {
-        if !a.sem_detalhe && !dets.contains_key(k) {
-            continue; // falha: fica declarada, não vira linha com chute
-        }
-        let mut r = consolidar(lista.get(k), dets.get(k), agora, op);
-        if !r.numero.is_empty() && avaliar(&mut r, &filtros, excecao, false) {
-            regs.push(r);
+    {
+        let det_cache = cache.get("det").and_then(Value::as_object);
+        let uni = Universo::novo(
+            det_cache
+                .into_iter()
+                .flat_map(|m| m.values())
+                .chain(dets.values()),
+        );
+        for k in &candidatos {
+            if !a.sem_detalhe && !dets.contains_key(k) {
+                continue; // falha: fica declarada, não vira linha com chute
+            }
+            let mut r = consolidar(lista.get(k), dets.get(k), agora, op, Some(&uni));
+            if !r.numero.is_empty() && avaliar(&mut r, &filtros, excecao, false) {
+                regs.push(r);
+            }
         }
     }
     let regs = ordenar(regs, &a.ordenar);
@@ -893,8 +1248,9 @@ pub fn executar(
         ),
         (
             "Novo processo".into(),
-            "Evento 'emitiu o Proc. Administrativo N/AAAA a partir deste documento' da linha do tempo, com a data/hora dele. Só conta processo: memorando, ofício etc. emitidos a partir do processo ficam de fora. 'Novo processo emitido em' é o mais recente (com o filtro de período, o mais recente dentro dele); a aba 'Novos processos' lista todos.".into(),
+            "Vínculos (coluna 'Novos processos (vínculo)' e aba 'Novos processos'): • emissão — evento 'emitiu o Proc. Administrativo N/AAAA a partir deste documento' da linha do tempo, com a data/hora dele; • origem — o processo novo traz este no cabeçalho de origem, sem o evento aqui; • citado neste — o texto de abertura ou um despacho deste processo cita o novo (link ou número com 'processo', 'nº'…); • cita este — o processo novo cita este. Os dois últimos cobrem a emissão que não foi a normal e só valem para Proc. Administrativo sem outra origem, emitido depois deste e adiante na licitação (Elaboração → Fase Preparatória → Abertura); a data é a de emissão do processo novo. Só conta processo: memorando, ofício etc. ficam de fora. 'Novo processo emitido em' é o mais recente (com o filtro de período, o mais recente dentro dele).".into(),
         ),
+        ("Menções".into(), resumo_mencoes),
         ("Dias".into(), "Dias corridos de calendário até a data de posição.".into()),
     ];
     Ok(Resultado {

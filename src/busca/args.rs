@@ -23,8 +23,10 @@ pub const EPILOGO: &str = r#"Exemplos (no programa, escreva só as opções no c
     --antes-de "Pesquisa de Mercado" --excecao-cita-setor SPOT-DCL-GP-CPPFI --pessoa "João Otávio"
   Emitiram novo processo (ex.: a Abertura saída da Fase Preparatória) em novembro, em todas as caixas:
     --caixas todas --novo-processo-de 01/11/2026 --novo-processo-ate 30/11/2026
-  Na Etapa Final da Elaboração e ainda sem novo processo emitido:
+  Na Etapa Final da Elaboração e ainda sem novo processo emitido (nem citado em outro processo):
     --fase Elaboração --etapa "Etapa Final" --sem-novo-processo
+  O mesmo, contando só a emissão normal ("a partir deste documento"):
+    --fase Elaboração --etapa "Etapa Final" --sem-novo-processo --sem-mencoes
   Processos de uma planilha/lista, sem varrer as caixas:
     --numeros-arquivo acompanhamento.xlsx
   Refiltrar sem acessar o 1Doc (usa o cache da última coleta):
@@ -35,7 +37,7 @@ Datas: DD/MM/AAAA, AAAA-MM-DD, hoje, ontem ou -N (N dias atrás). Limites inclus
 Textos: sem distinção de maiúsculas e acentos; "contém". Valores repetidos de um mesmo filtro = OU;
 filtros diferentes = E."#;
 
-const NOVO: &str = "Novo processo emitido a partir dele (evento 'emitiu o Proc. Administrativo …')";
+const NOVO: &str = "Novo processo emitido a partir dele (evento 'emitiu o Proc. Administrativo …' ou menção entre os processos)";
 
 const MODELO: &str = "{before-help}uso: {usage}\n\n{about}\n\n{all-args}{after-help}";
 
@@ -247,6 +249,9 @@ pub struct Args {
     /// não emitiu nenhum novo processo
     #[arg(long = "sem-novo-processo", help_heading = NOVO)]
     pub sem_novo_processo: bool,
+    /// só a emissão normal: ignora o processo novo que cita este ou é citado nele (e não monta o índice das caixas)
+    #[arg(long = "sem-mencoes", help_heading = NOVO)]
+    pub sem_mencoes: bool,
 
     /// Urgente, Alta, Média, Baixa (vírgula)
     #[arg(long, value_name = "P", action = ArgAction::Append, help_heading = "Outros filtros")]

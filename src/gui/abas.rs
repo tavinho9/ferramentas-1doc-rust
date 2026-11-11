@@ -361,7 +361,7 @@ impl AbaBusca {
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         descricao(
             ui,
-            "Busca nas caixas do setor por etapa, fase, datas, mudanças de etapa e novo processo emitido a partir do processo. Gera uma planilha com as abas Resultado, Transições, Novos processos e Parâmetros. Textos: sem diferença de maiúsculas e acentos, \"contém\"; vários valores num campo, separados por ';', valem como OU. Etapas: escolha na lista (ou digite parte do nome); para juntar outra, digite ';' depois da primeira e escolha de novo. A lista traz o fluxo da Abertura e as etapas que as buscas já encontraram.",
+            "Busca nas caixas do setor por etapa, fase, datas, mudanças de etapa e novo processo emitido a partir do processo (pela emissão normal ou pela menção de um processo no outro). Gera uma planilha com as abas Resultado, Transições, Novos processos e Parâmetros. Textos: sem diferença de maiúsculas e acentos, \"contém\"; vários valores num campo, separados por ';', valem como OU. Etapas: escolha na lista (ou digite parte do nome); para juntar outra, digite ';' depois da primeira e escolha de novo. A lista traz o fluxo da Abertura e as etapas que as buscas já encontraram.",
         );
         egui::CollapsingHeader::new("O que ler")
             .default_open(true)
@@ -479,7 +479,7 @@ impl AbaBusca {
                                     })
                                     .response
                                     .labelled_by(l.id);
-                                dica(ui, "a partir dele");
+                                dica(ui, "a partir dele ou por menção");
                             });
                             ui.end_row();
                             self.campos_data(
