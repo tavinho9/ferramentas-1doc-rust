@@ -21,7 +21,6 @@ pub mod busca;
 pub mod busca_argv;
 pub mod caminhos;
 pub mod cancelar;
-pub mod cli;
 pub mod config;
 pub mod datas;
 pub mod erro;

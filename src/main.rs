@@ -5,7 +5,7 @@
 //!     Ferramentas1Doc.exe --autoteste        confere o pacote e sai (0 = tudo certo)
 //!         [--relatorio ARQ] [--sem-navegador] [--sem-janela]
 //! ```
-// Sem console no Windows (o programa de linha de comando é o ferramentas1doc-cli).
+// Sem console no Windows.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
