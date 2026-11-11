@@ -1,4 +1,5 @@
-//! Saída da busca: planilha (Resultado, Transições, Parâmetros), CSV e resumo.
+//! Saída da busca: planilha (Resultado, Transições, Novos processos,
+//! Parâmetros), CSV e resumo.
 
 use std::path::Path;
 
@@ -11,7 +12,7 @@ use crate::planilha::xl;
 use crate::texto::corta;
 use crate::{msg, paralelo, re};
 
-pub const COLUNAS: [(&str, &str, f64); 26] = [
+pub const COLUNAS: [(&str, &str, f64); 27] = [
     ("Nº Processo", "numero", 13.0),
     ("Emissão", "emissao", 16.0),
     ("Prioridade", "prioridade", 10.0),
@@ -36,6 +37,7 @@ pub const COLUNAS: [(&str, &str, f64); 26] = [
     ("Status no meu setor", "status_setor", 16.0),
     ("Processo de origem", "pai", 13.0),
     ("Processos derivados", "derivados", 16.0),
+    ("Novo processo emitido em", "novo_processo_em", 17.0),
     ("Setores envolvidos (caixa)", "para", 34.0),
     ("Caixa", "caixa", 14.0),
 ];
@@ -122,6 +124,7 @@ pub fn escrever_xlsx(
     falhas: &[Falha],
     mostrar_cita: bool,
     marcar_periodo: bool,
+    marcar_novo: bool,
 ) -> Res<()> {
     let mut wb = Workbook::new();
     let dh = Format::new().set_num_format("dd/mm/yyyy hh:mm");
@@ -214,6 +217,55 @@ pub fn escrever_xlsx(
         }
     }
     wt.autofilter(0, 0, lin - 1, (tcols.len() - 1) as u16)
+        .map_err(xl)?;
+
+    // Um processo novo por linha (o processo da aba Resultado é o de origem)
+    let mut ncols: Vec<(&str, &str, f64)> = vec![
+        ("Nº Processo", "numero", 13.0),
+        ("Objeto", "assunto", 45.0),
+        ("Novo processo", "novo", 13.0),
+        ("Emitido em", "data", 17.0),
+        ("Autor", "autor", 24.0),
+        ("Setor", "setor", 18.0),
+        ("Etapa atual do processo", "etapa_atual", 26.0),
+    ];
+    if marcar_novo {
+        ncols.insert(4, ("No período filtrado?", "no_periodo", 11.0));
+    }
+    let wn = wb.add_worksheet();
+    wn.set_name("Novos processos").map_err(xl)?;
+    cabecalho(wn, &ncols)?;
+    let mut lin = 1u32;
+    for r in regs {
+        for (ni, n) in r.novos.iter().enumerate() {
+            for (j, (_, campo, _)) in ncols.iter().enumerate() {
+                if *campo == "novo" && !n.url.is_empty() {
+                    crate::planilha::link(wn, lin, j as u16, &n.url, &limpo(&n.numero), &link)?;
+                    continue;
+                }
+                let v = match *campo {
+                    "numero" => Campo::Texto(r.numero.clone()),
+                    "assunto" => Campo::Texto(r.assunto.clone()),
+                    "novo" => Campo::Texto(n.numero.clone()),
+                    "data" => n.data.map(Campo::Data).unwrap_or(Campo::Nada),
+                    "autor" => Campo::Texto(n.autor.clone()),
+                    "setor" => Campo::Texto(n.setor.clone()),
+                    "etapa_atual" => Campo::Texto(r.etapa.clone()),
+                    _ => Campo::Texto(
+                        if r.novos_periodo.contains(&ni) {
+                            "sim"
+                        } else {
+                            "não"
+                        }
+                        .into(),
+                    ),
+                };
+                escrever(wn, lin, j as u16, &v, &normal, &dh)?;
+            }
+            lin += 1;
+        }
+    }
+    wn.autofilter(0, 0, lin - 1, (ncols.len() - 1) as u16)
         .map_err(xl)?;
 
     let wp = wb.add_worksheet();

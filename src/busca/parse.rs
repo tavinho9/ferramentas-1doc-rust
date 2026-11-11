@@ -565,8 +565,14 @@ struct Evento {
     setor: String,
 }
 
-/// Linha do tempo: mudanças de etapa e processos derivados.
-fn eventos(doc: &Html) -> (Vec<Evento>, Vec<String>) {
+/// Carimbo do contêiner da linha do tempo; sem ele, a data escrita no evento.
+fn data_hora_evento(m: ElementRef<'_>) -> Option<NaiveDateTime> {
+    data_tc(m).or_else(|| dt_br(&txt(html::um(m, sel!(".despacho_data")))))
+}
+
+/// Linha do tempo: mudanças de etapa, processos derivados e as emissões
+/// deles ({numero, tipo, data, autor, setor, hash}, na ordem da página).
+fn eventos(doc: &Html) -> (Vec<Evento>, Vec<String>, Vec<Value>) {
     struct Bruto {
         i: usize,
         data: Option<NaiveDateTime>,
@@ -575,7 +581,7 @@ fn eventos(doc: &Html) -> (Vec<Evento>, Vec<String>) {
         autor: String,
         setor: String,
     }
-    let (mut brutos, mut derivados) = (Vec::new(), Vec::<String>::new());
+    let (mut brutos, mut derivados, mut emissoes) = (Vec::new(), Vec::<String>::new(), Vec::new());
     for (i, m) in doc.select(sel!(".desp_notificacao .marcou")).enumerate() {
         let quem = txt(html::um(m, sel!(".marcou_quem")));
         if let Some(md) = re!(r"(?i)emitiu\s+o\s+(.+?)\s+([\d.]+/\d{4})\s+a partir deste documento")
@@ -583,6 +589,17 @@ fn eventos(doc: &Html) -> (Vec<Evento>, Vec<String>) {
             && let Some(n) = norm_numero(&md[2])
             && !derivados.contains(&n)
         {
+            let hash = html::um(m, sel!(".marcou_quem a[href]"))
+                .map(|a| param(&consulta(html::attr_ou_vazio(a, "href")), "hash").to_uppercase())
+                .unwrap_or_default();
+            emissoes.push(json!({
+                "numero": n,
+                "tipo": md[1].trim(),
+                "data": iso(data_hora_evento(m)),
+                "autor": txt(html::um(m, sel!(".marcou_nome"))),
+                "setor": txt(html::um(m, sel!(".badge_env"))),
+                "hash": hash,
+            }));
             derivados.push(n);
         }
         if !html::tem_classe(m, "marcou_fast-forward") {
@@ -595,7 +612,7 @@ fn eventos(doc: &Html) -> (Vec<Evento>, Vec<String>) {
                     .replace_all(&quem, "")
                     .to_string()
             });
-        let dt = data_tc(m).or_else(|| dt_br(&txt(html::um(m, sel!(".despacho_data")))));
+        let dt = data_hora_evento(m);
         let tipo = if re!(r"(?i)^mudou da etapa").is_match(&quem) {
             "de"
         } else if re!(r"(?i)^para\b").is_match(&quem) {
@@ -650,7 +667,7 @@ fn eventos(doc: &Html) -> (Vec<Evento>, Vec<String>) {
     if let Some(p) = pend {
         mud.push(p);
     }
-    (mud, derivados)
+    (mud, derivados, emissoes)
 }
 
 fn despachos(doc: &Html) -> Vec<Value> {
@@ -1131,7 +1148,7 @@ pub fn parse_detalhe(fonte: &str, agora: NaiveDateTime) -> Res<Value> {
     }
 
     let desp = despachos(&doc);
-    let (ev, derivados) = eventos(&doc);
+    let (ev, derivados, emissoes) = eventos(&doc);
     let mut trans = transicoes(&desp, &titulos, &ev, emissao);
     let perm = if desde.is_empty() {
         None
@@ -1217,6 +1234,7 @@ pub fn parse_detalhe(fonte: &str, agora: NaiveDateTime) -> Res<Value> {
     o.insert("entrada_obs".into(), json!(entrada_obs));
     o.insert("status_setor".into(), json!(status.join(" | ")));
     o.insert("derivados".into(), json!(derivados));
+    o.insert("emissoes".into(), Value::Array(emissoes));
     o.insert("n_despachos".into(), json!(n_desp));
     o.insert("despachos".into(), Value::Array(guardados));
     o.insert("transicoes".into(), Value::Array(trans));

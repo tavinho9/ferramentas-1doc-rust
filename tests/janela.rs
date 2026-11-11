@@ -137,6 +137,37 @@ fn busca_campos_de_etapa_com_lista() {
 }
 
 #[test]
+fn busca_novo_processo_no_formulario() {
+    let fake = comum::Fake1Doc::novo();
+    let (_dd, mut j) = janela(&fake);
+    // as datas do novo processo têm calendário, como as outras
+    assert!(j.busca.datas.contains_key("novo_processo_de"));
+    assert!(j.busca.datas.contains_key("novo_processo_ate"));
+    *j.busca.texto_mut("novo_processo") = "Sim".into();
+    *j.busca.texto_mut("novo_processo_de") = "01/11/2026".into();
+    let argv = busca_argv::montar_argv(
+        &j.busca.formulario(),
+        None,
+        chrono::Local::now().naive_local(),
+        false,
+    )
+    .unwrap();
+    assert!(argv.contains(&"--novo-processo".to_string()));
+    let i = argv.iter().position(|a| a == "--novo-processo-de").unwrap();
+    assert_eq!(argv[i + 1], "01/11/2026");
+    *j.busca.texto_mut("novo_processo") = "Não".into();
+    j.executar(1);
+    assert!(j.executando.is_none());
+    assert!(
+        j.aviso
+            .as_deref()
+            .is_some_and(|a| a.contains("não combina")),
+        "{:?}",
+        j.aviso
+    );
+}
+
+#[test]
 fn faltantes_periodo_invalido_avisa_sem_executar() {
     let fake = comum::Fake1Doc::novo();
     let (_dd, mut j) = janela(&fake);
@@ -253,6 +284,8 @@ fn janela_mostra_as_abas_e_a_busca_a_instrucao_de_datas() {
     assert_eq!(h.state().aba_atual, 1);
     let _ = h.get_by_label_contains(busca_argv::DICA_DATAS.lines().next().unwrap()); // junto dos campos
     let _ = h.get_by_label("Ver todas as opções…");
+    let _ = h.get_by_label("Emitiu novo processo:");
+    let _ = h.get_by_label("…emitido de:");
 }
 
 #[test]

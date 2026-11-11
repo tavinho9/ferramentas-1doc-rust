@@ -174,6 +174,187 @@ fn busca() {
     );
 }
 
+#[test]
+fn busca_novo_processo() {
+    use ferramentas1doc::{busca, busca_argv};
+    let tres_dias = (comum::hoje() - Duration::days(3))
+        .and_hms_opt(14, 30, 0)
+        .unwrap();
+    let hoje_8h = comum::hoje().and_hms_opt(8, 0, 0).unwrap();
+    let p1: &'static comum::Processo = &comum::PROCESSOS[0];
+    let eventos =
+        comum::evento_emissao(
+            "Proc. Administrativo",
+            "40.001/2026",
+            "9999AAAA0000BBBB1111",
+            tres_dias,
+        ) + &comum::evento_emissao("Memorando", "512/2026", "8888CCCC9999DDDD0000", hoje_8h);
+    // P1 com dois documentos emitidos a partir dele: um processo e um memorando
+    let fake = comum::Fake1Doc::com(Some(Box::new(move |p| {
+        (p.query.get("pg").map(String::as_str) == Some("doc/ver")
+            && p.query
+                .get("hash")
+                .is_some_and(|h| h.eq_ignore_ascii_case(p1.hash)))
+        .then(|| comum::Resposta::html(comum::detalhe_com(p1, &eventos)))
+    })));
+    let d = comum::dados(&fake.base);
+    let numeros =
+        |r: &busca::Resultado| -> Vec<String> { r.regs.iter().map(|x| x.numero.clone()).collect() };
+    let args = |v: &[&str]| -> Vec<String> { v.iter().map(|s| s.to_string()).collect() };
+    // número de série do Excel (dias desde 30/12/1899)
+    let serie = |t: chrono::NaiveDateTime| {
+        let base = chrono::NaiveDate::from_ymd_opt(1899, 12, 30)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
+        (t - base).num_seconds() as f64 / 86400.0
+    };
+    let mesma_data = |celula: &str, t| (celula.parse::<f64>().unwrap() - serie(t)).abs() < 1e-6;
+
+    let form = busca_argv::Formulario {
+        caixas: vec!["entrada".into()],
+        ..Default::default()
+    }
+    .com("novo_processo", "Sim");
+    let mut argv = busca_argv::montar_argv(
+        &form,
+        Some(&d.pasta_saida()),
+        chrono::Local::now().naive_local(),
+        false,
+    )
+    .unwrap();
+    argv.extend(args(&["--pausa", "0"]));
+    let res = busca::main(&d.amb, &argv, Some(&comum::cred()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(numeros(&res), ["31.632/2026"]);
+    assert_eq!(res.regs[0].novo_processo_em, Some(tres_dias));
+    assert_eq!(res.regs[0].derivados, "40.001/2026, 512/2026"); // a coluna de antes segue com tudo
+    let arquivo = res.arquivo.clone().unwrap();
+    let linhas = comum::valores(&arquivo, Some("Resultado"));
+    let col = linhas[0]
+        .iter()
+        .position(|c| c == "Novo processo emitido em")
+        .unwrap();
+    assert!(mesma_data(&linhas[1][col], tres_dias), "{}", linhas[1][col]);
+    // só o processo: o memorando emitido a partir dele fica de fora
+    let novos = comum::valores(&arquivo, Some("Novos processos"));
+    assert_eq!(
+        novos[0],
+        [
+            "Nº Processo",
+            "Objeto",
+            "Novo processo",
+            "Emitido em",
+            "Autor",
+            "Setor",
+            "Etapa atual do processo"
+        ]
+    );
+    assert_eq!(novos.len(), 2);
+    assert_eq!(
+        [&novos[1][..3], &novos[1][4..]].concat(),
+        [
+            "31.632/2026",
+            "Aquisição de medicamentos",
+            "40.001/2026",
+            "Maria da Silva",
+            "SS-DAF",
+            "Pesquisa de Mercado"
+        ]
+    );
+    assert!(mesma_data(&novos[1][3], tres_dias), "{}", novos[1][3]);
+    let link = comum::link(&arquivo, Some("Novos processos"), 3, 2).unwrap();
+    assert!(link.contains("hash=9999AAAA0000BBBB1111"), "{link}");
+    let filtros = &res.params.iter().find(|p| p.0 == "Filtros").unwrap().1;
+    assert!(
+        filtros.contains("emitiu novo processo a partir dele"),
+        "{filtros}"
+    );
+
+    // sem acessar o 1Doc
+    let antes = fake.chaves().len();
+    let offline = |v: &[&str]| {
+        let mut a = args(&["--offline", "--sem-xlsx"]);
+        a.extend(args(v));
+        busca::main(&d.amb, &a, None).unwrap().unwrap()
+    };
+    assert_eq!(
+        numeros(&offline(&[
+            "--novo-processo-de",
+            "-5",
+            "--novo-processo-ate",
+            "ontem"
+        ])),
+        ["31.632/2026"]
+    );
+    // o de hoje é memorando, não processo
+    assert!(offline(&["--novo-processo-de", "hoje"]).regs.is_empty());
+    assert_eq!(numeros(&offline(&["--sem-novo-processo"])), ["31.700/2026"]);
+    // com período, a aba Novos processos diz quais caíram nele
+    let saida = d.pasta_saida().join("periodo.xlsx");
+    let saida_txt = saida.to_string_lossy().into_owned();
+    busca::main(
+        &d.amb,
+        &args(&[
+            "--offline",
+            "--saida",
+            &saida_txt,
+            "--novo-processo-de",
+            "-5",
+        ]),
+        None,
+    )
+    .unwrap();
+    let col_e: Vec<String> = comum::valores(&saida, Some("Novos processos"))
+        .into_iter()
+        .map(|l| l[4].clone())
+        .collect();
+    assert_eq!(col_e, ["No período filtrado?", "sim"]);
+    assert_eq!(fake.chaves().len(), antes);
+
+    // Cache gravado antes de a busca ler as emissões (só os números em "derivados")
+    let arq = d.pasta_dados().join("1doc_cache.json");
+    let mut cache: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&arq).unwrap()).unwrap();
+    for det in cache["det"].as_object_mut().unwrap().values_mut() {
+        det.as_object_mut().unwrap().remove("emissoes").unwrap();
+    }
+    std::fs::write(&arq, cache.to_string()).unwrap();
+    // sem acessar o 1Doc, o período não tem como ser conferido: lacuna declarada, não chute
+    let res = offline(&["--novo-processo-de", "-5"]);
+    assert!(res.regs.is_empty());
+    let falhas: Vec<(&str, &str)> = res
+        .falhas
+        .iter()
+        .map(|f| (f.numero.as_str(), f.motivo.as_str()))
+        .collect();
+    assert_eq!(
+        falhas,
+        [(
+            "31.632/2026",
+            "cache sem a data do novo processo (modo offline)"
+        )]
+    );
+    assert_eq!(numeros(&offline(&["--novo-processo"])), ["31.632/2026"]);
+    // com acesso, só o processo que tem derivado é reaberto; o outro vem do cache
+    let antes = fake.chaves().len();
+    let res = busca::main(
+        &d.amb,
+        &args(&["--novo-processo-de", "-5", "--sem-xlsx", "--pausa", "0"]),
+        Some(&comum::cred()),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(numeros(&res), ["31.632/2026"]);
+    assert!(res.falhas.is_empty());
+    let abertos = fake.chaves()[antes..]
+        .iter()
+        .filter(|c| c.1 == "doc/ver")
+        .count();
+    assert_eq!(abertos, 1);
+}
+
 mod faltantes_testes {
     use super::comum;
     use chrono::Duration;

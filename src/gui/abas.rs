@@ -157,13 +157,15 @@ pub struct AbaBusca {
     pub arquivo_cache: PathBuf,
 }
 
-const CAMPOS_DATA: [&str; 6] = [
+const CAMPOS_DATA: [&str; 8] = [
     "emissao_de",
     "emissao_ate",
     "mudanca_de",
     "mudanca_ate",
     "entrada_de",
     "entrada_ate",
+    "novo_processo_de",
+    "novo_processo_ate",
 ];
 
 impl AbaBusca {
@@ -359,7 +361,7 @@ impl AbaBusca {
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         descricao(
             ui,
-            "Busca nas caixas do setor por etapa, fase, datas e mudanças de etapa. Gera uma planilha com as abas Resultado, Transições e Parâmetros. Textos: sem diferença de maiúsculas e acentos, \"contém\"; vários valores num campo, separados por ';', valem como OU. Etapas: escolha na lista (ou digite parte do nome); para juntar outra, digite ';' depois da primeira e escolha de novo. A lista traz o fluxo da Abertura e as etapas que as buscas já encontraram.",
+            "Busca nas caixas do setor por etapa, fase, datas, mudanças de etapa e novo processo emitido a partir do processo. Gera uma planilha com as abas Resultado, Transições, Novos processos e Parâmetros. Textos: sem diferença de maiúsculas e acentos, \"contém\"; vários valores num campo, separados por ';', valem como OU. Etapas: escolha na lista (ou digite parte do nome); para juntar outra, digite ';' depois da primeira e escolha de novo. A lista traz o fluxo da Abertura e as etapas que as buscas já encontraram.",
         );
         egui::CollapsingHeader::new("O que ler")
             .default_open(true)
@@ -457,6 +459,34 @@ impl AbaBusca {
                                 "entrada_de",
                                 "entrada_ate",
                                 "Entrou na etapa atual de:",
+                            );
+                            ui.end_row();
+                            let l = ui.label("Emitiu novo processo:");
+                            ui.horizontal(|ui| {
+                                let novo = self.texto_mut("novo_processo");
+                                egui::ComboBox::from_id_salt("novo_processo")
+                                    .selected_text(if novo.is_empty() {
+                                        "(tanto faz)".to_string()
+                                    } else {
+                                        novo.clone()
+                                    })
+                                    .width(90.0)
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(novo, String::new(), "(tanto faz)");
+                                        for (v, _) in busca_argv::NOVO_PROCESSO {
+                                            ui.selectable_value(novo, v.to_string(), v);
+                                        }
+                                    })
+                                    .response
+                                    .labelled_by(l.id);
+                                dica(ui, "a partir dele");
+                            });
+                            ui.end_row();
+                            self.campos_data(
+                                ui,
+                                "novo_processo_de",
+                                "novo_processo_ate",
+                                "…emitido de:",
                             );
                             ui.end_row();
                             self.campo(ui, "sem_mov_min", "Parado há (dias), mín.:", 50.0);

@@ -11,8 +11,10 @@
 //!    quadro de etapas e a linha do tempo.
 //! 4. Mudança de etapa — eventos "Mudança de etapa" da linha do tempo; sem
 //!    eles, o rótulo dos despachos "via etapa", conferido contra o quadro.
-//! 5. Filtros e saída — .xlsx com abas Resultado, Transições e Parâmetros
-//!    (CSV opcional) e um resumo.
+//! 5. Novo processo — os eventos "emitiu o Proc. Administrativo N/AAAA a
+//!    partir deste documento" dizem que processos saíram deste e quando.
+//! 6. Filtros e saída — .xlsx com abas Resultado, Transições, Novos
+//!    processos e Parâmetros (CSV opcional) e um resumo.
 
 pub mod args;
 pub mod parse;
@@ -478,6 +480,21 @@ fn detalhar_um(
             format!("{}?pg=doc/ver&hash={hash}&itd={itd}", cli.sess.base)
         }),
     );
+    if let Some(Value::Array(emissoes)) = o.get_mut("emissoes") {
+        for e in emissoes.iter_mut().filter_map(Value::as_object_mut) {
+            let h = e
+                .get("hash")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let url = if h.is_empty() {
+                String::new()
+            } else {
+                format!("{}?pg=doc/ver&hash={h}&itd={itd}", cli.sess.base)
+            };
+            e.insert("url".into(), json!(url));
+        }
+    }
     o.insert(
         "_ult_mov_lista".into(),
         json!(item.map(|i| s(i, "ult_mov")).unwrap_or_default()),
@@ -730,6 +747,7 @@ pub fn executar(
         ));
     }
     let (mut dets, mut falhas, mut do_cache) = (Map::new(), Vec::new(), 0usize);
+    let periodo_novo = op.novo_processo_de.is_some() || op.novo_processo_ate.is_some();
     if !a.sem_detalhe {
         let mut pedidos: Vec<Pedido> = Vec::new();
         let det_cache = cache
@@ -740,16 +758,32 @@ pub fn executar(
         for k in &candidatos {
             let item = lista.get(k).filter(|v| !v.is_null());
             let c = det_cache.get(k).filter(|c| arquivos::verdadeiro(c));
+            // Detalhe gravado antes de a busca ler as emissões, com processo derivado: falta a
+            // data do processo novo. Reabre (são poucos); no --offline, só pesa no filtro de período.
+            let sem_data_novo = c.is_some_and(|c| {
+                c.get("emissoes").is_none()
+                    && c.get("derivados")
+                        .and_then(Value::as_array)
+                        .is_some_and(|d| !d.is_empty())
+            });
             // Reaproveita só se a listagem é de agora e a última movimentação não mudou.
             let ult = item.map(|i| s(i, "ult_mov")).unwrap_or_default();
             let reaproveita = c.is_some()
                 && !a.refazer
                 && (a.offline
-                    || (lista_fresca
+                    || (!sem_data_novo
+                        && lista_fresca
                         && item.is_some()
                         && !ult.is_empty()
                         && c.map(|c| s(c, "_ult_mov_lista")) == Some(ult)));
-            if reaproveita {
+            if reaproveita && sem_data_novo && periodo_novo {
+                let numero = k.split_once('|').map(|x| x.1).unwrap_or(k).to_string();
+                falhas.push(Falha {
+                    numero,
+                    motivo: "cache sem a data do novo processo (modo offline)".into(),
+                    obtido: String::new(),
+                });
+            } else if reaproveita {
                 dets.insert(k.clone(), c.unwrap().clone());
                 do_cache += 1;
             } else if a.offline {
@@ -857,6 +891,10 @@ pub fn executar(
             "Setores envolvidos".into(),
             "Coluna 'Para' da caixa, com os setores escondidos no '+N' e nos badges truncados. Não é o setor que está com o processo: para isso, veja 'Últ. despacho — para'.".into(),
         ),
+        (
+            "Novo processo".into(),
+            "Evento 'emitiu o Proc. Administrativo N/AAAA a partir deste documento' da linha do tempo, com a data/hora dele. Só conta processo: memorando, ofício etc. emitidos a partir do processo ficam de fora. 'Novo processo emitido em' é o mais recente (com o filtro de período, o mais recente dentro dele); a aba 'Novos processos' lista todos.".into(),
+        ),
         ("Dias".into(), "Dias corridos de calendário até a data de posição.".into()),
     ];
     Ok(Resultado {
@@ -918,6 +956,7 @@ pub fn main(amb: &Ambiente, argv: &[String], cred: Option<&Credenciais>) -> Res<
         || op.mudanca_ate.is_some()
         || !a.mudanca_para.is_empty()
         || !a.mudanca_origem.is_empty();
+    let marcar_novo = op.novo_processo_de.is_some() || op.novo_processo_ate.is_some();
     if !a.sem_xlsx {
         let saida = match a.saida.as_deref().filter(|s| !s.is_empty()) {
             Some(s) => PathBuf::from(s),
@@ -936,6 +975,7 @@ pub fn main(amb: &Ambiente, argv: &[String], cred: Option<&Credenciais>) -> Res<
             &res.falhas,
             mostrar_cita,
             marcar,
+            marcar_novo,
         )?;
         let abs = std::path::absolute(&saida).unwrap_or(saida);
         msg!(amb, "\nPlanilha: {}", abs.display());
