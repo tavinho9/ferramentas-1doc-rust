@@ -599,15 +599,13 @@ pub fn citacoes(
     proprio_ano: &str,
 ) -> (Vec<String>, Vec<String>) {
     let doc = html::doc(fonte);
-    // Como o SoupStrainer(class_="texto_original") do bs4 4.13+: só casa o
-    // atributo class que é exatamente "texto_original" (com outra classe
-    // junto, o bloco fica de fora na versão Python; aqui também, pela paridade).
-    let so_ela = |e: scraper::ElementRef| {
-        html::attr(e, "class").is_some_and(|c| limpo(c) == "texto_original")
-    };
+    // Todo bloco com a classe texto_original, mesmo com outras junto
+    // (class="texto_original fr-view"). Um bloco dentro de outro já entra
+    // pelo de fora e não é lido duas vezes.
+    let e_bloco = |e: scraper::ElementRef| e.value().classes().any(|c| c == "texto_original");
     let blocos: Vec<scraper::ElementRef> = doc
         .select(crate::sel!(".texto_original"))
-        .filter(|e| so_ela(*e) && html::ancestral(*e, so_ela).is_none())
+        .filter(|e| html::ancestral(*e, e_bloco).is_none())
         .collect();
     let (mut hashes, mut numeros): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
     let ano_min: i64 = proprio_ano.parse().unwrap_or(0);
