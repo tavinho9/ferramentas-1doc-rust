@@ -559,3 +559,21 @@ mod faltantes_funcoes {
         assert!(tr.starts_with("… ") && tr.ends_with(" …") && tr.contains("cancelar"));
     }
 }
+
+/// O despacho pode vir com outras classes junto de texto_original.
+#[test]
+fn citacoes_le_despacho_com_varias_classes() {
+    let html = concat!(
+        r#"<table class="relative despacho"><tr><td class="celula_despacho">"#,
+        r#"<div class="texto_original">Segue para o processo nº 31.700/2026.</div></td></tr></table>"#,
+        r#"<table class="relative despacho"><tr><td class="celula_despacho">"#,
+        r#"<div class="texto_original fr-view">Emitido o Proc. Administrativo 31.800/2026 "#,
+        r#"(<a href="./?pg=doc/ver&hash=AAAA1111BBBB2222CCCC">ver</a>).</div></td></tr></table>"#,
+        r#"<table class="relative despacho"><tr><td class="celula_despacho">"#,
+        r#"<div class="fr-view texto_original">Abertura: processo 31.900/2026.</div></td></tr></table>"#,
+        r#"<p class="rodape">Processo 32.000/2026 fora dos despachos</p>"#,
+    );
+    let (hashes, numeros) = ferramentas1doc::verificadores::citacoes(html, "31.632/2026", "2026");
+    assert_eq!(hashes, ["AAAA1111BBBB2222CCCC"]);
+    assert_eq!(numeros, ["31.700/2026", "31.800/2026", "31.900/2026"]);
+}
