@@ -194,14 +194,26 @@ impl Planilha {
     }
 }
 
-/// Nomes das abas (para a lista da interface).
-pub fn abas(caminho: &Path) -> Res<Vec<String>> {
+/// Nome da aba ativa (a que o Excel mostra ao abrir; o `wb.active` do
+/// openpyxl), ou a primeira se o activeTab do arquivo não apontar para
+/// nenhuma. Serve também para a pasta lida com `lazy_read`, cujas abas não
+/// estão desserializadas: nela o `active_sheet()` do umya entra em pânico.
+pub fn aba_ativa(wb: &Spreadsheet) -> Option<String> {
+    let abas = wb.sheet_collection_no_check();
+    abas.get(wb.workbook_view().active_tab() as usize)
+        .or_else(|| abas.first())
+        .map(|w| w.name().to_string())
+}
+
+/// Nomes das abas e a aba ativa (para a lista da interface), numa leitura só.
+pub fn abas(caminho: &Path) -> Res<(Vec<String>, Option<String>)> {
     let wb = abrir_pasta(caminho, true)?;
-    Ok(wb
+    let nomes = wb
         .sheet_collection_no_check()
         .iter()
         .map(|w| w.name().to_string())
-        .collect())
+        .collect();
+    Ok((nomes, aba_ativa(&wb)))
 }
 
 fn abrir_pasta(caminho: &Path, preguicoso: bool) -> Res<Spreadsheet> {
@@ -241,7 +253,7 @@ pub fn ler_planilha(caminho: &Path, aba: Option<&str>) -> Res<Planilha> {
             )));
         }
         Some(a) => a.to_string(),
-        None => wb.active_sheet().name().to_string(),
+        None => aba_ativa(&wb).ok_or_else(|| Erro::encerrar("✗ A planilha não tem abas."))?,
     };
     let ws = wb.sheet_by_name_mut(&aba).expect("aba");
     let (ult_lin, ult_col) = limpar_excesso(ws);

@@ -72,10 +72,15 @@ pub fn rodar(relatorio: Option<&str>, com_navegador: bool, com_janela: bool) -> 
         wb.save(&caminho).map_err(|e| e.to_string())?;
         let lido = umya_spreadsheet::reader::xlsx::read(&caminho).map_err(|e| e.to_string())?;
         let v = lido.sheet(0).map(|w| w.value("A1")).unwrap_or_default();
-        if v == "Nº Processo" {
+        if v != "Nº Processo" {
+            return Err(format!("lido {v:?}"));
+        }
+        // a lista de abas da janela (leitura preguiçosa, a do programa ao abrir)
+        let (nomes, ativa) = crate::verificadores::abas(&caminho).map_err(|e| e.to_string())?;
+        if nomes == ["Sheet1"] && ativa.as_deref() == Some("Sheet1") {
             Ok(String::new())
         } else {
-            Err(format!("lido {v:?}"))
+            Err(format!("abas {nomes:?}, ativa {ativa:?}"))
         }
     });
     item("Chrome/Edge instalado", &|| {
