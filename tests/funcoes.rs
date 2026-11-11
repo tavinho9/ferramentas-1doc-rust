@@ -548,6 +548,26 @@ mod busca_argv_testes {
         );
     }
 
+    /// Coluna Menções: todas as citações, com (pai)/(filho) quando se sabe e a fonte fraca marcada.
+    #[test]
+    fn texto_mencoes() {
+        use ferramentas1doc::busca::registro::texto_mencoes;
+        let citados = [
+            serde_json::json!({"numero": "28.000/2026", "hash": "", "fonte": "texto"}),
+            serde_json::json!({"numero": "39.144/2026", "hash": "AB", "fonte": "mencao"}),
+            serde_json::json!({"numero": "", "hash": "5476D715A594730A44C8", "fonte": "link"}),
+            serde_json::json!({"numero": "", "hash": "FFFF000011112222", "fonte": "mencao"}),
+        ];
+        let achar = |c: &serde_json::Value| {
+            (c["hash"] == "5476D715A594730A44C8").then(|| "26.831/2026".to_string())
+        };
+        assert_eq!(
+            texto_mencoes(&citados, "28.000/2026", &["39.144/2026".into()], achar),
+            "28.000/2026 (pai; número no texto), 39.144/2026 (filho), 26.831/2026, link FFFF000011…"
+        );
+        assert_eq!(texto_mencoes(&[], "", &[], |_| None), "");
+    }
+
     const FASE: &str = "Fase Preparatória de Procedimento Licitatório";
     const ABERTURA: &str = "Abertura de Procedimento Licitatório";
     const ELAB: &str = "Elaboração de Documentação Preparatória";

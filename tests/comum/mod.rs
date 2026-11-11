@@ -265,13 +265,51 @@ pub fn detalhe(p: &Processo) -> String {
     detalhe_com(p, "")
 }
 
-/// Página do processo com `eventos` (HTML) a mais na linha do tempo.
-pub fn detalhe_com(p: &Processo, eventos: &str) -> String {
-    let mk = Local
+fn carimbo_hoje() -> i64 {
+    Local
         .from_local_datetime(&hoje().and_hms_opt(9, 15, 0).unwrap())
         .earliest()
         .map(|d| d.timestamp())
-        .unwrap_or(0);
+        .unwrap_or(0)
+}
+
+/// Despacho com três menções que não são nem pai nem filho conferidos (a do
+/// 1Doc fica fora do texto, na lista de documentos mencionados).
+pub const DESPACHO_COM_MENCOES: &str =
+    "Origem: Proc. Administrativo 28.000/2026. Ver também o processo nº 30.161/2026.";
+pub const ANEXO_COM_MENCAO: &str = r#"<a class=" pre_visualizar" data-mention="2" href="./?pg=doc/ver&amp;hash=5476D715A594730A44C82DCD&amp;itd=3&amp;origem=emissao_anexada"><i class="icon-folder-open"></i> Proc. Administrativo 26.831/2026 - Abertura de Procedimento Licitatório</a>"#;
+
+/// O 1Doc de mentira com o processo `i` de PROCESSOS trazendo as menções
+/// acima no despacho e o processo de origem 28.000/2026 no cabeçalho.
+pub fn com_mencoes(i: usize) -> Fake1Doc {
+    let p: &'static Processo = &PROCESSOS[i];
+    Fake1Doc::com(Some(Box::new(move |q| {
+        (q.query.get("pg").map(String::as_str) == Some("doc/ver")
+            && q.query
+                .get("hash")
+                .is_some_and(|h| h.eq_ignore_ascii_case(p.hash)))
+        .then(|| {
+            Resposta::html(pagina_detalhe(&Detalhe {
+                numero: p.numero,
+                hash: p.hash,
+                prioridade: p.prioridade,
+                objeto: p.objeto,
+                descricao: p.descricao,
+                assunto: ABERTURA,
+                etapas: &p.etapas,
+                mk: carimbo_hoje(),
+                pai: Some(("28.000/2026", "ZZZZ0000ZZZZ0000ZZZZ")),
+                despacho: DESPACHO_COM_MENCOES,
+                anexos: ANEXO_COM_MENCAO,
+                eventos: "",
+            }))
+        })
+    })))
+}
+
+/// Página do processo com `eventos` (HTML) a mais na linha do tempo.
+pub fn detalhe_com(p: &Processo, eventos: &str) -> String {
+    let mk = carimbo_hoje();
     pagina_detalhe(&Detalhe {
         numero: p.numero,
         hash: p.hash,

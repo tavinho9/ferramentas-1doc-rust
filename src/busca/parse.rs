@@ -750,6 +750,26 @@ fn despachos(doc: &Html) -> Vec<Value> {
 /// No máximo quantos processos citados ficam no detalhe.
 pub const MAX_CITADOS: usize = 40;
 
+/// Versão da leitura das citações gravada no detalhe ("citados_v"). Detalhe
+/// sem ela, ou com uma anterior, é reaberto com acesso ao 1Doc. 2: menções do
+/// 1Doc (data-mention) em qualquer lugar da página e a fonte de cada citação.
+pub const CITADOS_VERSAO: i64 = 2;
+
+/// O detalhe traz as citações lidas pela versão atual (ver CITADOS_VERSAO)?
+pub fn citados_atuais(det: &Value) -> bool {
+    det.get("citados").is_some()
+        && det.get("citados_v").and_then(Value::as_i64).unwrap_or(0) >= CITADOS_VERSAO
+}
+
+/// As citações de uma página inteira do processo (para o Faltantes e o Verificar planilha).
+pub fn mencoes_da_pagina(fonte: &str, proprio_numero: &str, proprio_hash: &str) -> Vec<Value> {
+    citados(
+        &html::doc(fonte),
+        &norm_numero(proprio_numero).unwrap_or_default(),
+        &proprio_hash.to_uppercase(),
+    )
+}
+
 /// De onde veio a citação, da mais confiável para a menos (ver `citados`).
 pub const FONTES_CITACAO: [&str; 3] = ["mencao", "link", "texto"];
 
@@ -1357,6 +1377,7 @@ pub fn parse_detalhe(fonte: &str, agora: NaiveDateTime) -> Res<Value> {
             &hash.to_uppercase(),
         )),
     );
+    o.insert("citados_v".into(), json!(CITADOS_VERSAO));
     o.insert("n_despachos".into(), json!(n_desp));
     o.insert("despachos".into(), Value::Array(guardados));
     o.insert("transicoes".into(), Value::Array(trans));

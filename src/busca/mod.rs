@@ -710,7 +710,7 @@ fn completar_mencoes(
                     .filter(|c| arquivos::verdadeiro(c))
                     .is_some_and(|c| {
                         !a.refazer
-                            && c.get("citados").is_some()
+                            && parse::citados_atuais(c)
                             && !ult.is_empty()
                             && s(c, "_ult_mov_lista") == ult
                     });
@@ -1070,8 +1070,9 @@ pub fn executar(
                         .and_then(Value::as_array)
                         .is_some_and(|d| !d.is_empty())
             });
-            // Detalhe gravado antes de a busca ler as menções: reabre se o filtro precisa delas.
-            let sem_citados = mencoes && c.is_some_and(|c| c.get("citados").is_none());
+            // Detalhe gravado antes da leitura atual das menções: reabre (a coluna Menções
+            // precisa delas); no --offline, só pesa no filtro de novo processo.
+            let sem_citados = c.is_some_and(|c| !parse::citados_atuais(c));
             // Reaproveita só se a listagem é de agora e a última movimentação não mudou.
             let ult = item.map(|i| s(i, "ult_mov")).unwrap_or_default();
             let reaproveita = c.is_some()
@@ -1090,7 +1091,7 @@ pub fn executar(
                     motivo: "cache sem a data do novo processo (modo offline)".into(),
                     obtido: String::new(),
                 });
-            } else if reaproveita && sem_citados {
+            } else if reaproveita && sem_citados && mencoes {
                 let numero = k.split_once('|').map(|x| x.1).unwrap_or(k).to_string();
                 falhas.push(Falha {
                     numero,
@@ -1251,6 +1252,10 @@ pub fn executar(
             "Vínculos (coluna 'Novos processos (vínculo)' e aba 'Novos processos'): • emissão — evento 'emitiu o Proc. Administrativo N/AAAA a partir deste documento' da linha do tempo, com a data/hora dele; • origem — o processo novo traz este no cabeçalho de origem, sem o evento aqui; • citado neste — este processo cita o novo; • cita este — o processo novo cita este. A coluna 'Citação' diz como: menção do 1Doc (o processo escolhido na lista ao escrever o despacho, data-mention), link no texto ou número no texto (com 'processo', 'nº'… antes). Os dois últimos cobrem a emissão que não foi a normal e só valem para Proc. Administrativo sem outra origem, emitido depois deste e adiante na licitação (Elaboração → Fase Preparatória → Abertura); a data é a de emissão do processo novo. Só conta processo: memorando, ofício etc. ficam de fora. 'Novo processo emitido em' é o mais recente (com o filtro de período, o mais recente dentro dele).".into(),
         ),
         ("Menções".into(), resumo_mencoes),
+        (
+            "Coluna Menções".into(),
+            "Todos os processos citados no texto de abertura e nos despachos deste — menção do 1Doc, link ou número com 'processo', 'nº'… antes —, mesmo quando não dá para dizer se são o pai ou o filho. '(pai)': o processo de origem; '(filho)': um dos novos processos; '(número no texto)': citado só pelo número digitado.".into(),
+        ),
         ("Dias".into(), "Dias corridos de calendário até a data de posição.".into()),
     ];
     Ok(Resultado {

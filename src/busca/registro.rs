@@ -332,6 +332,51 @@ pub fn novos_processos(det: Option<&Value>, uni: Option<&Universo>, mencoes: boo
     novos
 }
 
+/// Coluna "Menções": todos os processos citados, mesmo quando não dá para
+/// dizer se são o pai ou o filho. "(pai)" é o processo de origem; "(filho)",
+/// um dos processos novos; "(número no texto)", citação só pelo número
+/// digitado. `achar(citado)` dá o número de um link sem número. Ex.:
+/// "28.133/2026 (pai), 39.144/2026 (filho), 30.161/2026 (número no texto)".
+pub fn texto_mencoes(
+    citados: &[Value],
+    pai: &str,
+    filhos: &[String],
+    mut achar: impl FnMut(&Value) -> Option<String>,
+) -> String {
+    let pai = norm_numero(pai).unwrap_or_default();
+    let filhos: Vec<String> = filhos.iter().filter_map(|f| norm_numero(f)).collect();
+    citados
+        .iter()
+        .map(|c| {
+            let mut n = s(Some(c), "numero");
+            if n.is_empty() {
+                n = achar(c).unwrap_or_default();
+            }
+            let mut extra: Vec<&str> = Vec::new();
+            if !n.is_empty() && n == pai {
+                extra.push("pai");
+            } else if !n.is_empty() && filhos.contains(&n) {
+                extra.push("filho");
+            }
+            if s(Some(c), "fonte") == "texto" {
+                extra.push("número no texto");
+            }
+            let rotulo = if n.is_empty() {
+                let h: String = s(Some(c), "hash").chars().take(10).collect();
+                format!("link {h}…")
+            } else {
+                n
+            };
+            if extra.is_empty() {
+                rotulo
+            } else {
+                format!("{rotulo} ({})", extra.join("; "))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// "40.001/2026 (emissão), 39.144/2026 (cita este)" para a coluna do Resultado.
 pub fn texto_novos(novos: &[Novo]) -> String {
     novos
@@ -372,6 +417,8 @@ pub struct Registro {
     pub derivados: String,
     pub novos: Vec<Novo>,
     pub novos_texto: String,
+    /// coluna Menções (ver `texto_mencoes`)
+    pub mencoes: String,
     /// o mais recente; com o filtro de período, o mais recente dentro dele
     pub novo_processo_em: Option<NaiveDateTime>,
     pub caixa: String,
@@ -435,6 +482,7 @@ impl Registro {
             "derivados" => t(&self.derivados),
             "novo_processo_em" => d(self.novo_processo_em),
             "novos_texto" => t(&self.novos_texto),
+            "mencoes" => t(&self.mencoes),
             "caixa" => t(&self.caixa),
             "tem_detalhe" => Campo::Bool(self.tem_detalhe),
             "etapa_meu_setor" => b(self.etapa_meu_setor),
@@ -611,6 +659,23 @@ pub fn consolidar(
     };
     r.novo_processo_em = r.novos.iter().filter_map(|n| n.data).max();
     r.novos_texto = texto_novos(&r.novos);
+    let citados: &[Value] = det
+        .and_then(|d| d.get("citados"))
+        .and_then(Value::as_array)
+        .map(|v| v.as_slice())
+        .unwrap_or_default();
+    let filhos: Vec<String> = r.novos.iter().map(|n| n.numero.clone()).collect();
+    r.mencoes = texto_mencoes(citados, &r.pai, &filhos, |c| {
+        uni.and_then(|u| u.achar(c)).map(|d| s(Some(d), "numero"))
+    });
+    if let Some(d) = det
+        && !super::parse::citados_atuais(d)
+    {
+        r.obs.push(
+            "menções não lidas: detalhe gravado por versão anterior (rode com acesso ao 1Doc)"
+                .into(),
+        );
+    }
     r.dias_etapa = r.entrada.map(|e| (agora.date() - e.date()).num_days());
     r.dias_sem_mov = r.ult_mov.map(|e| (agora.date() - e.date()).num_days());
     let mud: Vec<&Transicao> = r.transicoes.iter().filter(|t| !t.mesma_etapa).collect();
