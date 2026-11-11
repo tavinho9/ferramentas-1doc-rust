@@ -12,7 +12,7 @@ use crate::planilha::xl;
 use crate::texto::corta;
 use crate::{msg, paralelo, re};
 
-pub const COLUNAS: [(&str, &str, f64); 28] = [
+pub const COLUNAS: [(&str, &str, f64); 29] = [
     ("Nº Processo", "numero", 13.0),
     ("Emissão", "emissao", 16.0),
     ("Prioridade", "prioridade", 10.0),
@@ -39,6 +39,7 @@ pub const COLUNAS: [(&str, &str, f64); 28] = [
     ("Processos derivados", "derivados", 16.0),
     ("Novo processo emitido em", "novo_processo_em", 17.0),
     ("Novos processos (vínculo)", "novos_texto", 30.0),
+    ("Menções", "mencoes", 34.0),
     ("Setores envolvidos (caixa)", "para", 34.0),
     ("Caixa", "caixa", 14.0),
 ];
@@ -158,7 +159,7 @@ pub fn escrever_xlsx(
         let l = (i + 1) as u32;
         for (j, (_, campo, _)) in cols.iter().enumerate() {
             let v = valor(r, campo);
-            let largo = ["assunto", "historico", "obs", "para"].contains(campo);
+            let largo = ["assunto", "historico", "obs", "para", "mencoes"].contains(campo);
             if *campo == "numero" && !r.url.is_empty() && !r.numero.is_empty() {
                 crate::planilha::link(ws, l, j as u16, &r.url, &limpo(&r.numero), &link)?;
                 continue;

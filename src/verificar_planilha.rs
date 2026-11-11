@@ -5,9 +5,11 @@
 //! Saída: `<planilha>_verificada_AAAA-MM-DD_HHMM.xlsx`, com SÓ os processos
 //! que chegaram à Pesquisa de Mercado ou passaram dela: a aba original,
 //! formatação preservada, sem as linhas dos demais, mais as colunas
-//! Etapa atual (1Doc) | Processo pai | Processo filho | Objeto (abertura) |
-//! Observação; o número, o pai e o filho viram link para o 1Doc;
-//! autofiltro em todas as colunas e cabeçalho congelado.
+//! Etapa atual (1Doc) | Processo pai | Processo filho | Menções |
+//! Objeto (abertura) | Observação; o número, o pai, o filho e a primeira
+//! menção viram link para o 1Doc; autofiltro em todas as colunas e cabeçalho
+//! congelado. Menções: todos os processos citados no texto de abertura e nos
+//! despachos, mesmo quando não dá para dizer se são o pai ou o filho.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -730,6 +732,9 @@ pub struct Resultado {
     pub pai: Option<(String, String)>,
     pub filhos: Vec<Filho>,
     pub objeto_filho: Option<String>,
+    /// coluna Menções e o link da primeira menção
+    pub mencoes: String,
+    pub mencoes_url: String,
 }
 
 /// A linha vai para a planilha?
@@ -884,6 +889,14 @@ fn processar(ctx: &Ctx, item: &Item) -> Res<Resultado> {
     } else if !res.filhos.is_empty() && res.objeto_filho.as_deref().unwrap_or("").is_empty() {
         objeto_dos_filhos(ctx, &mut res)?;
     }
+    // Coluna Menções: os processos citados na página, com (pai) e (filho) para
+    // os que já estão nas colunas ao lado
+    let mut filhos: Vec<String> = res.filhos.iter().map(|f| f.numero.clone()).collect();
+    filhos.extend(res.novos.iter().cloned());
+    filhos.extend(res.cadeia.split('→').map(|x| x.trim().to_string()));
+    let citados = crate::busca::parse::mencoes_da_pagina(fonte, &item.numero, &achado.hash);
+    let pai = res.pai.as_ref().map(|p| p.0.clone()).unwrap_or_default();
+    (res.mencoes, res.mencoes_url) = v::mencoes(ctx.amb, &ctx.cache, &citados, &pai, &filhos);
     Ok(res)
 }
 
@@ -892,10 +905,11 @@ fn processar(ctx: &Ctx, item: &Item) -> Res<Resultado> {
 // ============================================================
 
 /// Colunas acrescentadas no fim da aba, nesta ordem
-pub const COLUNAS_NOVAS: [&str; 5] = [
+pub const COLUNAS_NOVAS: [&str; 6] = [
     "Etapa atual (1Doc)",
     "Processo pai",
     "Processo filho",
+    "Menções",
     "Objeto (abertura)",
     "Observação",
 ];
@@ -1153,8 +1167,9 @@ pub fn exportar(pl: &mut v::Planilha, resultados: &[Resultado], destino: &Path) 
             let nums: Vec<&str> = r.filhos.iter().map(|f| f.numero.as_str()).collect();
             escrever(ws, linha, 2, &nums.join("; "), &r.filhos[0].url);
         }
-        escrever(ws, linha, 3, r.objeto_filho.as_deref().unwrap_or(""), "");
-        escrever(ws, linha, 4, &r.obs, "");
+        escrever(ws, linha, 3, &r.mencoes, &r.mencoes_url);
+        escrever(ws, linha, 4, r.objeto_filho.as_deref().unwrap_or(""), "");
+        escrever(ws, linha, 5, &r.obs, "");
         por_link(ws, col_num, linha, &r.url, true);
     }
     let n_cols = *col.last().unwrap();

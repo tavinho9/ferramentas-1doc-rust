@@ -527,6 +527,9 @@ fn busca_novo_processo_por_mencao() {
         textos,
         ["41.000/2026 (cita este)", "39.144/2026 (citado neste)"]
     );
+    // coluna Menções
+    let mencoes: Vec<&str> = res.regs.iter().map(|r| r.mencoes.as_str()).collect();
+    assert_eq!(mencoes, ["", "39.144/2026 (filho)"]);
     // a data é a de emissão do processo novo
     let datas: Vec<chrono::NaiveDate> = res
         .regs
@@ -598,6 +601,21 @@ fn busca_novo_processo_por_mencao() {
         numeros(&buscar(&["--novo-processo-de", "-1"], false)),
         ["30.600/2026"]
     );
+    // a coluna Menções mostra a menção mesmo quando ela não decide pai nem filho
+    let sem = buscar(&["--sem-mencoes", "--sem-novo-processo"], false);
+    let v: Vec<(&str, &str)> = sem
+        .regs
+        .iter()
+        .map(|r| (r.numero.as_str(), r.mencoes.as_str()))
+        .collect();
+    assert_eq!(
+        v,
+        [
+            ("30.500/2026", ""),
+            ("30.600/2026", "39.144/2026"),
+            ("30.700/2026", "")
+        ]
+    );
     // só a emissão normal: nenhuma das três tem o evento, e o índice não é montado
     let antes = fake.chaves().len();
     let res = buscar(&["--sem-mencoes", "--novo-processo"], false);
@@ -645,10 +663,25 @@ fn busca_novo_processo_por_mencao() {
             .all(|f| f.motivo == "cache sem as menções a outros processos (modo offline)")
     );
     assert!(!res.falhas.is_empty());
-    // sem o filtro de novo processo, o cache antigo serve como antes
-    assert_eq!(buscar(&[], true).regs.len(), 3);
-    // com acesso, reabre o que não tem as menções e volta ao mesmo resultado
+    // sem o filtro de novo processo, o cache antigo serve como antes, com a lacuna anotada
+    let antigo = buscar(&[], true).regs;
+    assert_eq!(antigo.len(), 3);
+    assert!(
+        antigo
+            .iter()
+            .all(|r| r.obs.join("; ").contains("menções não lidas"))
+    );
+    // com acesso, reabre o que não tem as menções (mesmo sem o filtro) e volta ao mesmo resultado
     fake.logado.store(true, std::sync::atomic::Ordering::SeqCst);
+    let antes = fake.chaves().len();
+    assert_eq!(buscar(&[], false).regs.len(), 3);
+    assert_eq!(
+        fake.chaves()[antes..]
+            .iter()
+            .filter(|c| c.1 == "doc/ver")
+            .count(),
+        5
+    );
     assert_eq!(
         numeros(&buscar(&["--sem-novo-processo"], false)),
         ["30.700/2026"]
@@ -679,7 +712,7 @@ mod faltantes_testes {
 
     #[test]
     fn faltantes() {
-        let fake = comum::Fake1Doc::novo();
+        let fake = comum::com_mencoes(1);
         let d = comum::dados(&fake.base);
         let pl = comum::planilha(&d.pasta_dados().join("acomp.xlsx"), &["31.632/2026"]);
         let destino = faltantes::executar(&d.amb, &pl, None, &comum::cred(), op())
@@ -696,6 +729,14 @@ mod faltantes_testes {
             ["31.700/2026"]
         );
         assert_eq!(linhas[1][2], "Reforma da Escola Municipal Exemplo");
+        // menções do despacho, mesmo sem saber se são pai ou filho; a origem do cabeçalho sai marcada
+        assert_eq!(linhas[0][8..], ["Menções", "Observação"]);
+        assert_eq!(
+            linhas[1][8],
+            "26.831/2026, 28.000/2026 (pai; número no texto), 30.161/2026 (número no texto)"
+        );
+        let link = comum::link(&destino, Some("Faltantes"), 9, 2).unwrap();
+        assert!(link.contains("hash=5476D715A594730A44C82DCD"), "{link}");
         assert!(d.pasta_dados().join("hash_cache_1doc.json").is_file());
         // período padrão: de 1º/jan do ano mais antigo da planilha até hoje
         assert_eq!(
@@ -830,7 +871,7 @@ mod verificar_testes {
 
     #[test]
     fn verificar_planilha() {
-        let fake = comum::Fake1Doc::novo();
+        let fake = comum::com_mencoes(0);
         let d = comum::dados(&fake.base);
         let pl = comum::planilha(
             &d.pasta_dados().join("acomp.xlsx"),
@@ -854,13 +895,22 @@ mod verificar_testes {
                 "Etapa atual (1Doc)",
                 "Processo pai",
                 "Processo filho",
+                "Menções",
                 "Objeto (abertura)",
                 "Observação"
             ]
         );
         assert_eq!(linhas[1][5], "Pesquisa de Mercado");
+        assert_eq!(linhas[1][6], "28.000/2026");
+        // menções do despacho, mesmo sem saber se são pai ou filho; a origem do cabeçalho sai marcada
         assert_eq!(
             linhas[1][8],
+            "26.831/2026, 28.000/2026 (pai; número no texto), 30.161/2026 (número no texto)"
+        );
+        let link = comum::link(&destino, None, 9, 2).unwrap();
+        assert!(link.contains("hash=5476D715A594730A44C82DCD"), "{link}");
+        assert_eq!(
+            linhas[1][9],
             "Aquisição de medicamentos para a rede municipal de saúde"
         );
         assert_eq!(

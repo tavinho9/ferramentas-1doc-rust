@@ -425,6 +425,44 @@ impl Cache {
     }
 }
 
+/// Coluna Menções do Faltantes e do Verificar planilha: os processos citados
+/// na página (`crate::busca::parse::mencoes_da_pagina`), com (pai) e (filho)
+/// para os que já se sabe. Link sem número no texto vira número pelo cache,
+/// quando o hash já foi localizado antes. Devolve (texto, link da primeira
+/// menção).
+pub fn mencoes(
+    amb: &Ambiente,
+    cache: &Cache,
+    citados: &[Value],
+    pai: &str,
+    filhos: &[String],
+) -> (String, String) {
+    let mut por_hash: Option<std::collections::HashMap<String, String>> = None;
+    let texto = crate::busca::registro::texto_mencoes(citados, pai, filhos, |c| {
+        let h = c.get("hash").and_then(Value::as_str).unwrap_or("");
+        por_hash
+            .get_or_insert_with(|| {
+                cache
+                    .dados
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|(k, _)| ler_numero(k).is_some())
+                    .filter_map(|(k, v)| v.as_str().map(|v| (v.to_string(), k.clone())))
+                    .collect()
+            })
+            .get(h)
+            .cloned()
+    });
+    let url = citados
+        .iter()
+        .filter_map(|c| c.get("hash").and_then(Value::as_str))
+        .find(|h| !h.is_empty())
+        .map(|h| url_detalhe(amb, h))
+        .unwrap_or_default();
+    (texto, url)
+}
+
 /// Hashes que a resposta do Localizar pode trazer, em ordem de confiança:
 /// redirecionamentos, URL final, campos JSON e, só se a resposta for curta,
 /// o corpo.

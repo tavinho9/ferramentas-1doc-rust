@@ -7,7 +7,9 @@
 //! emitido a partir dele); é de abertura, fase preparatória ou elaboração
 //! (etiqueta ou id do assunto) ou tem a Pesquisa de Mercado no fluxo; está
 //! ANTES da Pesquisa de Mercado; e cujo último despacho não menciona
-//! cancelamento. Saída: `<planilha>_faltantes_AAAA-MM-DD_HHMM.xlsx`.
+//! cancelamento. Saída: `<planilha>_faltantes_AAAA-MM-DD_HHMM.xlsx`, com a
+//! coluna Menções (todos os processos citados no texto de abertura e nos
+//! despachos, mesmo quando não dá para dizer se são o pai ou o filho).
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -886,6 +888,16 @@ pub struct Classificado {
     pub origem_num: String,
     pub novos: Vec<String>,
     pub trecho_cancel: String,
+    /// coluna Menções e o link da primeira menção
+    pub mencoes: String,
+    pub mencoes_url: String,
+}
+
+/// Coluna Menções: os processos citados na página, com (pai) para a origem e
+/// (filho) para o processo novo achado, se já se sabe.
+fn anotar_mencoes(ctx: &Ctx, res: &mut Classificado, citados: &[Value]) {
+    (res.mencoes, res.mencoes_url) =
+        v::mencoes(ctx.amb, &ctx.cache, citados, &res.origem_num, &res.novos);
 }
 
 fn classificar(ctx: &Ctx, ln: &LinhaLista) -> Res<Classificado> {
@@ -1005,6 +1017,9 @@ fn classificar(ctx: &Ctx, ln: &LinhaLista) -> Res<Classificado> {
         res.ult_data = u.data.clone();
         res.ult_texto = u.texto.clone();
     }
+    // As linhas que podem ir para a planilha (faltante, cancelado) levam as menções
+    let citados = crate::busca::parse::mencoes_da_pagina(&fonte, &ln.numero, &ln.hash);
+    anotar_mencoes(ctx, &mut res, &citados);
     if let Some(d) = cancelamento_em(&despachos) {
         let onde = [&d.rotulo, &d.data]
             .into_iter()
@@ -1019,6 +1034,7 @@ fn classificar(ctx: &Ctx, ln: &LinhaLista) -> Res<Classificado> {
     }
     let (_o_hash, o_num) = v::ler_origem(&fonte);
     res.origem_num = o_num.clone().unwrap_or_default();
+    anotar_mencoes(ctx, &mut res, &citados);
     if let Some(o) = o_num.filter(|o| ctx.planilha.contains(o)) {
         res.situacao = VINCULADO.into();
         res.obs = format!("Emitido a partir de {o}, que está na planilha");
@@ -1034,6 +1050,7 @@ fn classificar(ctx: &Ctx, ln: &LinhaLista) -> Res<Classificado> {
             }
         }
         res.novos = todos.clone();
+        anotar_mencoes(ctx, &mut res, &citados);
         let na_pl: Vec<&String> = todos.iter().filter(|n| ctx.planilha.contains(*n)).collect();
         if !na_pl.is_empty() {
             res.situacao = VINCULADO.into();
@@ -1124,7 +1141,7 @@ pub fn deduplicar(mut faltantes: Vec<Classificado>) -> (Vec<Classificado>, Vec<S
 // EXPORTAÇÃO
 // ============================================================
 
-pub const COLUNAS: [&str; 9] = [
+pub const COLUNAS: [&str; 10] = [
     "Nº Processo",
     "Prioridade",
     "Objeto",
@@ -1133,13 +1150,18 @@ pub const COLUNAS: [&str; 9] = [
     "Caixa",
     "Último despacho",
     "Trecho do último despacho",
+    "Menções",
     "Observação",
 ];
 pub const TRECHO_MAX: usize = 300;
 
 fn colunas_cancel() -> Vec<&'static str> {
     let mut c: Vec<&str> = COLUNAS[..7].to_vec();
-    c.extend(["Trecho com a menção a cancelamento", "Observação"]);
+    c.extend([
+        "Trecho com a menção a cancelamento",
+        "Menções",
+        "Observação",
+    ]);
     c
 }
 
@@ -1229,6 +1251,7 @@ fn preencher_aba(
             r.linha.caixas.join(", "),
             dtxt,
             trecho_de(r),
+            r.mencoes.clone(),
             r.obs.clone(),
         ];
         grade.push(
@@ -1273,6 +1296,9 @@ fn preencher_aba(
             let c = j as u16;
             if j == 0 {
                 crate::planilha::link(ws, l, c, &linhas[i].url, txt, &link)?;
+            } else if j == 8 && !linhas[i].mencoes_url.is_empty() {
+                // Menções: a célula leva à primeira menção
+                crate::planilha::link(ws, l, c, &linhas[i].mencoes_url, txt, &link)?;
             } else if let Some(d) = dt {
                 let f = if chrono::Timelike::hour(d) != 0 || chrono::Timelike::minute(d) != 0 {
                     "dd/mm/yyyy hh:mm"
