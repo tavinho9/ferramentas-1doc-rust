@@ -246,6 +246,7 @@ fn busca_novo_processo() {
             "Objeto",
             "Novo processo",
             "Vínculo",
+            "Citação",
             "Emitido em",
             "Autor",
             "Setor",
@@ -255,19 +256,20 @@ fn busca_novo_processo() {
     );
     assert_eq!(novos.len(), 2);
     assert_eq!(
-        [&novos[1][..4], &novos[1][5..]].concat(),
+        [&novos[1][..5], &novos[1][6..]].concat(),
         [
             "31.632/2026",
             "Aquisição de medicamentos",
             "40.001/2026",
             "emissão",
+            "",
             "Maria da Silva",
             "SS-DAF",
             "Pesquisa de Mercado",
             ""
         ]
     );
-    assert!(mesma_data(&novos[1][4], tres_dias), "{}", novos[1][4]);
+    assert!(mesma_data(&novos[1][5], tres_dias), "{}", novos[1][5]);
     let col_v = linhas[0]
         .iter()
         .position(|c| c == "Novos processos (vínculo)")
@@ -317,7 +319,7 @@ fn busca_novo_processo() {
     .unwrap();
     let col_e: Vec<String> = comum::valores(&saida, Some("Novos processos"))
         .into_iter()
-        .map(|l| l[5].clone())
+        .map(|l| l[6].clone())
         .collect();
     assert_eq!(col_e, ["No período filtrado?", "sim"]);
     assert_eq!(fake.chaves().len(), antes);
@@ -364,6 +366,11 @@ fn busca_novo_processo() {
     assert_eq!(abertos, 1);
 }
 
+/// Como o 1Doc mostra, abaixo do despacho, o documento mencionado nele (marcação real, outro hash).
+const MENCAO_PRE_VISUALIZAR: &str = r#"<a class=" pre_visualizar" data-mention="2"
+  href="./?pg=doc/ver&amp;hash=AB02AAAA0000000000BB&amp;itd=3&amp;origem=emissao_anexada">
+  <i class="icon-folder-open"></i> Proc. Administrativo 39.144/2026 - Abertura de Procedimento Licitatório </a>"#;
+
 /// Fases preparatórias na caixa Em aberto e as aberturas que saíram delas sem a
 /// emissão normal ("a partir deste documento"): a abertura cita a fase, ou a
 /// fase cita a abertura.
@@ -384,6 +391,7 @@ fn processos_mencoes(hoje: chrono::NaiveDateTime) -> Vec<comum::Outro> {
             caixa,
             pai: None,
             despacho,
+            anexos: "",
         };
     vec![
         // a Abertura 41.000 (Arquivados) cita esta: "cita este"
@@ -397,17 +405,21 @@ fn processos_mencoes(hoje: chrono::NaiveDateTime) -> Vec<comum::Outro> {
             Some("entrada"),
             "Concluída a fase preparatória.",
         ),
-        // esta cita a Abertura 39.144, que não está em caixa nenhuma do setor: "citado neste"
-        outro(
-            "FP02AAAA0000000000BB",
-            "30.600/2026",
-            "Fase de merenda",
-            comum::FASE_PREP,
-            &fase,
-            10,
-            Some("entrada"),
-            r#"A demanda prossegue no <a href="./?pg=doc/ver&hash=AB02AAAA0000000000BB&itd=3&origem=emissao_anexada">Proc. Administrativo 39.144/2026</a>."#,
-        ),
+        // esta menciona a Abertura 39.144, que não está em caixa nenhuma do setor: "citado neste".
+        // A menção do 1Doc só aparece na lista de documentos mencionados, fora do texto do despacho.
+        comum::Outro {
+            anexos: MENCAO_PRE_VISUALIZAR,
+            ..outro(
+                "FP02AAAA0000000000BB",
+                "30.600/2026",
+                "Fase de merenda",
+                comum::FASE_PREP,
+                &fase,
+                10,
+                Some("entrada"),
+                "A demanda segue para a abertura.",
+            )
+        },
         // citada só por quem não conta: abertura com outra origem e processo de pagamento
         outro(
             "FP03AAAA0000000000CC",
@@ -529,9 +541,17 @@ fn busca_novo_processo_por_mencao() {
         ]
     );
     let aba = comum::valores(&saida, Some("Novos processos"));
-    let linhas: Vec<[&str; 4]> = aba[1..]
+    let linhas: Vec<[&str; 5]> = aba[1..]
         .iter()
-        .map(|l| [l[0].as_str(), l[2].as_str(), l[3].as_str(), l[8].as_str()])
+        .map(|l| {
+            [
+                l[0].as_str(),
+                l[2].as_str(),
+                l[3].as_str(),
+                l[4].as_str(),
+                l[9].as_str(),
+            ]
+        })
         .collect();
     assert_eq!(
         linhas,
@@ -540,12 +560,14 @@ fn busca_novo_processo_por_mencao() {
                 "30.500/2026",
                 "41.000/2026",
                 "cita este",
+                "número no texto",
                 "Validação de Requisição"
             ],
             [
                 "30.600/2026",
                 "39.144/2026",
                 "citado neste",
+                "menção do 1Doc",
                 "Validação de Requisição"
             ]
         ]

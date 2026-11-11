@@ -98,6 +98,8 @@ pub struct Outro {
     pub caixa: Option<&'static str>,
     pub pai: Option<(&'static str, &'static str)>,
     pub despacho: &'static str,
+    /// HTML que fica no despacho fora do bloco de texto (a lista de documentos mencionados)
+    pub anexos: &'static str,
 }
 
 fn carimbo_br(t: NaiveDateTime) -> i64 {
@@ -130,6 +132,7 @@ impl Outro {
             mk: carimbo_br(self.emissao),
             pai: self.pai,
             despacho: self.despacho,
+            anexos: self.anexos,
             eventos: "",
         })
     }
@@ -280,6 +283,7 @@ pub fn detalhe_com(p: &Processo, eventos: &str) -> String {
         mk,
         pai: None,
         despacho: "Encaminho para análise.",
+        anexos: "",
         eventos,
     })
 }
@@ -296,6 +300,7 @@ pub struct Detalhe<'a> {
     pub mk: i64,
     pub pai: Option<(&'a str, &'a str)>,
     pub despacho: &'a str,
+    pub anexos: &'a str,
     pub eventos: &'a str,
 }
 
@@ -332,7 +337,7 @@ pub fn pagina_detalhe(d: &Detalhe) -> String {
   <abbr class="despacho_data" title="Em {hoje} 10:00">hoje</abbr>
   <div class="rf_header"><strong>Despacho 1</strong></div>
   <div class="rf_de"><span class="badge_env">SS-DAF</span></div>
-</th></tr><tr><td class="celula_despacho"><div class="texto_original fr-view">{despacho}</div></td></tr>
+</th></tr><tr><td class="celula_despacho"><div class="texto_original fr-view">{despacho}</div>{anexos}</td></tr>
 </table></div>
 {eventos}
 <div class="tm_conteudo"><div id="parent_wa" data-current_idph="1">{modelo}</div></div>
@@ -346,6 +351,7 @@ pub fn pagina_detalhe(d: &Detalhe) -> String {
         assunto = d.assunto,
         id = id_assunto(d.assunto),
         despacho = d.despacho,
+        anexos = d.anexos,
         eventos = d.eventos,
         kanban = kanban_de(d.etapas, false),
         modelo = kanban_de(d.etapas, true),

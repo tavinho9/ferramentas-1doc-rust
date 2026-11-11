@@ -44,6 +44,16 @@ pub const COLUNAS: [(&str, &str, f64); 28] = [
 ];
 const CAMPOS_SIM_NAO: [&str; 2] = ["cita_alvo", "etapa_meu_setor"];
 
+/// Como a fonte da citação aparece na aba Novos processos.
+fn rotulo_fonte(f: &str) -> &str {
+    match f {
+        "mencao" => "menção do 1Doc",
+        "link" => "link no texto",
+        "texto" => "número no texto",
+        outra => outra,
+    }
+}
+
 fn valor(r: &Registro, campo: &str) -> Campo {
     if campo == "obs" {
         return Campo::Texto(r.obs.join("; "));
@@ -226,6 +236,7 @@ pub fn escrever_xlsx(
         ("Objeto", "assunto", 45.0),
         ("Novo processo", "novo", 13.0),
         ("Vínculo", "vinculo", 16.0),
+        ("Citação", "citacao", 16.0),
         ("Emitido em", "data", 17.0),
         ("Autor", "autor", 24.0),
         ("Setor", "setor", 18.0),
@@ -233,7 +244,7 @@ pub fn escrever_xlsx(
         ("Etapa do novo processo", "etapa", 26.0),
     ];
     if marcar_novo {
-        ncols.insert(5, ("No período filtrado?", "no_periodo", 11.0));
+        ncols.insert(6, ("No período filtrado?", "no_periodo", 11.0));
     }
     let wn = wb.add_worksheet();
     wn.set_name("Novos processos").map_err(xl)?;
@@ -251,6 +262,13 @@ pub fn escrever_xlsx(
                     "assunto" => Campo::Texto(r.assunto.clone()),
                     "novo" => Campo::Texto(n.numero.clone()),
                     "vinculo" => Campo::Texto(n.vinculos.join(" + ")),
+                    "citacao" => Campo::Texto(
+                        n.fontes
+                            .iter()
+                            .map(|f| rotulo_fonte(f))
+                            .collect::<Vec<_>>()
+                            .join(" / "),
+                    ),
                     "data" => n.data.map(Campo::Data).unwrap_or(Campo::Nada),
                     "autor" => Campo::Texto(n.autor.clone()),
                     "setor" => Campo::Texto(n.setor.clone()),

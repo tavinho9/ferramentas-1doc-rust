@@ -513,11 +513,37 @@ mod busca_argv_testes {
         assert_eq!(
             citados(&doc, "41.000/2026", "HASHPROPRIO"),
             [
-                serde_json::json!({"numero": "30.500/2026", "hash": ""}),
+                serde_json::json!({"numero": "30.500/2026", "hash": "", "fonte": "texto"}),
                 // link e número do mesmo processo: um registro
-                serde_json::json!({"numero": "39.144/2026", "hash": "65EDAAAA"}),
+                serde_json::json!({"numero": "39.144/2026", "hash": "65EDAAAA", "fonte": "link"}),
                 // link sem número: confere-se ao abrir
-                serde_json::json!({"numero": "", "hash": "8888CCCC"}),
+                serde_json::json!({"numero": "", "hash": "8888CCCC", "fonte": "link"}),
+            ]
+        );
+    }
+
+    /// A menção escolhida na lista do 1Doc (data-mention="2"), com a marcação
+    /// real: no corpo do despacho e na lista de documentos mencionados, fora do
+    /// bloco de texto. Vale sem contexto antes do número e vem primeiro, mesmo
+    /// que o número também apareça digitado.
+    #[test]
+    fn citados_mencao_do_1doc() {
+        use ferramentas1doc::busca::parse::citados;
+        let fonte = r#"<table class="despacho"><tr><td class="celula_despacho"><div class="texto_original fr-view">
+      Segue em <a class="mention label mention_2" href="https://app.1doc.com.br/?pg=doc/ver&amp;hash=5476D715A594730A44C82DCD&amp;itd=3&amp;gr=10&amp;origem=mention&amp;s=montesclaros" target="_blank" data-mention="2" data-tipo="2" data-id="55747711" rel="noreferrer noopener">Proc. Administrativo 26.831/2026 - Licitação da Construção da Praça de Santa Rita Rural</a>,
+      processo 26.831/2026.</div>
+      <a class=" pre_visualizar" data-mention="2" href="./?pg=doc/ver&amp;hash=5476D715A594730A44C82DCD&amp;itd=3&amp;origem=emissao_anexada">
+        <i class="icon-folder-open"></i> Proc. Administrativo 26.831/2026 - Abertura de Procedimento Licitatório </a>
+      <a class=" pre_visualizar" data-mention="2" href="./?pg=doc/ver&amp;hash=AAAA0000BBBB1111CCCC2222">
+        <i class="icon-folder-open"></i> Proc. Administrativo 27.000/2026 - Fase Preparatória </a>
+      <a class="mention label mention_1" data-mention="1" href="./?pg=usuario&amp;hash=FFFF">Maria</a>
+      </td></tr></table>"#;
+        let doc = ferramentas1doc::html::doc(fonte);
+        assert_eq!(
+            citados(&doc, "1/2026", ""),
+            [
+                serde_json::json!({"numero": "26.831/2026", "hash": "5476D715A594730A44C82DCD", "fonte": "mencao"}),
+                serde_json::json!({"numero": "27.000/2026", "hash": "AAAA0000BBBB1111CCCC2222", "fonte": "mencao"}),
             ]
         );
     }
@@ -610,6 +636,15 @@ mod busca_argv_testes {
         fase["emissoes"] = serde_json::json!([
             {"numero": "40.001/2026", "tipo": "Proc. Administrativo", "data": "2026-11-02T10:00:00"}
         ]);
+        fase["citados"][0]["fonte"] = serde_json::json!("mencao");
+        let mut abertura = det(
+            "41.000/2026",
+            ABERTURA,
+            "2026-11-05T09:00:00",
+            "",
+            &["30.500/2026"],
+        );
+        abertura["citados"][0]["fonte"] = serde_json::json!("texto");
         let outros = [
             fase.clone(),
             det(
@@ -619,13 +654,7 @@ mod busca_argv_testes {
                 "30.500/2026",
                 &["30.500/2026"],
             ),
-            det(
-                "41.000/2026",
-                ABERTURA,
-                "2026-11-05T09:00:00",
-                "",
-                &["30.500/2026"],
-            ),
+            abertura,
             det(
                 "41.050/2026",
                 ABERTURA,
@@ -663,6 +692,8 @@ mod busca_argv_testes {
                 .and_hms_opt(9, 0, 0)
         );
         assert_eq!(novos[1].etapa, "Validação de Requisição");
+        // a menção do 1Doc vem antes do número digitado
+        assert_eq!(novos[1].fontes, ["mencao", "texto"]);
         assert_eq!(
             texto_novos(&novos),
             "40.001/2026 (emissão), 41.000/2026 (citado neste + cita este), 41.050/2026 (origem)"
@@ -822,6 +853,23 @@ fn citacoes_le_despacho_com_varias_classes() {
     let (hashes, numeros) = ferramentas1doc::verificadores::citacoes(html, "31.632/2026", "2026");
     assert_eq!(hashes, ["AAAA1111BBBB2222CCCC"]);
     assert_eq!(numeros, ["31.700/2026", "31.800/2026", "31.900/2026"]);
+}
+
+/// A lista de documentos mencionados fica fora do .texto_original; a menção a usuário não conta.
+#[test]
+fn citacoes_le_mencao_do_1doc_fora_do_texto() {
+    let html = concat!(
+        r#"<table class="relative despacho"><tr><td class="celula_despacho">"#,
+        r#"<div class="texto_original fr-view">Segue.</div>"#,
+        r#"<a class=" pre_visualizar" data-mention="2" href="./?pg=doc/ver&amp;hash=5476D715A594730A44C82DCD"#,
+        r#"&amp;itd=3&amp;origem=emissao_anexada"><i class="icon-folder-open"></i> Proc. Administrativo "#,
+        r#"26.831/2026 - Abertura de Procedimento Licitatório</a>"#,
+        r#"<a class="mention label mention_1" data-mention="1" href="./?pg=x&amp;hash=FFFF0000FFFF0000FFFF">"#,
+        r#"Maria</a></td></tr></table>"#,
+    );
+    let (hashes, numeros) = ferramentas1doc::verificadores::citacoes(html, "1/2026", "2026");
+    assert_eq!(hashes, ["5476D715A594730A44C82DCD"]);
+    assert!(numeros.is_empty());
 }
 
 /// activeTab apontando para uma aba que não existe (arquivo editado por

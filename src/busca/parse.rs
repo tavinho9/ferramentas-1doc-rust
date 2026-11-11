@@ -750,17 +750,37 @@ fn despachos(doc: &Html) -> Vec<Value> {
 /// No máximo quantos processos citados ficam no detalhe.
 pub const MAX_CITADOS: usize = 40;
 
-/// Outros processos mencionados no texto de abertura e nos despachos (blocos
-/// .texto_original): links para documentos (hash, e o número quando o texto
-/// do link o traz) e números NN.NNN/AAAA com contexto de processo antes
-/// ("processo", "abertura", "nº"…) e sem contexto de lei, requisição,
-/// contrato etc. (a regra do Faltantes/Verificar). Não filtra por ano: o
-/// mesmo registro serve para os dois sentidos (este cita o novo; o novo cita
-/// este), e a data é conferida no uso (`aceita_mencao`).
-/// Devolve [{numero, hash}], sem repetir, no máximo MAX_CITADOS.
+/// De onde veio a citação, da mais confiável para a menos (ver `citados`).
+pub const FONTES_CITACAO: [&str; 3] = ["mencao", "link", "texto"];
+
+/// Posição em FONTES_CITACAO (menor = mais confiável); fonte desconhecida fica por último.
+pub fn forca_fonte(fonte: &str) -> usize {
+    FONTES_CITACAO
+        .iter()
+        .position(|f| *f == fonte)
+        .unwrap_or(FONTES_CITACAO.len())
+}
+
+/// Outros processos mencionados neste, de três fontes, da mais confiável para a menos:
+///   - "mencao": a menção do 1Doc, escolhida na lista ao escrever o despacho.
+///     Vem como `<a data-mention="2">` com o hash no href e "Proc.
+///     Administrativo N/AAAA - …" no texto, tanto no corpo do despacho (class
+///     "mention label mention_2") quanto na lista de documentos mencionados
+///     (class "pre_visualizar"). Lida em qualquer lugar da página;
+///   - "link": outro link para documento dentro do texto de abertura e dos
+///     despachos (blocos .texto_original), com o número quando o texto do
+///     link o traz;
+///   - "texto": número NN.NNN/AAAA digitado nesses blocos, com contexto de
+///     processo antes ("processo", "abertura", "nº"…) e sem contexto de lei,
+///     requisição, contrato etc. (a regra do Faltantes/Verificar).
+///
+/// Não filtra por ano: o mesmo registro serve para os dois sentidos (este
+/// cita o novo; o novo cita este), e a data é conferida no uso
+/// (`aceita_mencao`). Devolve [{numero, hash, fonte}], um por processo (com
+/// a fonte mais confiável), no máximo MAX_CITADOS.
 pub fn citados(doc: &Html, proprio_numero: &str, proprio_hash: &str) -> Vec<Value> {
-    let mut out: Vec<(String, String)> = Vec::new();
-    let mut add = |numero: String, h: String| {
+    let mut out: Vec<(String, String, &'static str)> = Vec::new();
+    let mut add = |numero: String, h: String, fonte: &'static str| {
         if (!numero.is_empty() && numero == proprio_numero) || (!h.is_empty() && h == proprio_hash)
         {
             return;
@@ -776,37 +796,46 @@ pub fn citados(doc: &Html, proprio_numero: &str, proprio_hash: &str) -> Vec<Valu
             if c.1.is_empty() {
                 c.1 = h;
             }
+            if forca_fonte(fonte) < forca_fonte(c.2) {
+                c.2 = fonte;
+            }
             return;
         }
         if out.len() < MAX_CITADOS {
-            out.push((numero, h));
+            out.push((numero, h, fonte));
         }
     };
+    // (número, hash) de um link para documento que não diz ser memorando, ofício etc.
+    let de_link = |a: ElementRef<'_>| -> Option<(String, String)> {
+        let h = param(&consulta(html::attr_ou_vazio(a, "href")), "hash").to_uppercase();
+        let rotulo = t1(a);
+        let num = numeros_de_texto(&rotulo).into_iter().next();
+        ((!h.is_empty() || num.is_some())
+            && !re!(r"^(memorando|oficio|parecer|circular|despacho|decreto|portaria|anexo)")
+                .is_match(&normtxt(&rotulo)))
+        .then(|| (num.unwrap_or_default(), h))
+    };
+    for a in doc.select(sel!(r#"[data-mention="2"], .mention_2"#)) {
+        if let Some((n, h)) = de_link(a) {
+            add(n, h, "mencao");
+        }
+    }
     // Todo bloco com a classe texto_original, mesmo com outras junto
     // (class="texto_original fr-view"); um bloco dentro de outro entra pelo de fora.
     let e_bloco = |e: ElementRef| e.value().classes().any(|c| c == "texto_original");
-    for b in doc
+    let blocos: Vec<ElementRef> = doc
         .select(sel!(".texto_original"))
         .filter(|e| html::ancestral(*e, e_bloco).is_none())
-    {
+        .collect();
+    for b in &blocos {
         for a in b.select(sel!("a[href]")) {
-            let h = param(&consulta(html::attr_ou_vazio(a, "href")), "hash").to_uppercase();
-            let rotulo = t1(a);
-            if h.is_empty()
-                || re!(r"^(memorando|oficio|parecer|circular|despacho|decreto|portaria|anexo)")
-                    .is_match(&normtxt(&rotulo))
+            if !param(&consulta(html::attr_ou_vazio(a, "href")), "hash").is_empty()
+                && let Some((n, h)) = de_link(a)
             {
-                continue;
+                add(n, h, "link");
             }
-            add(
-                numeros_de_texto(&rotulo)
-                    .into_iter()
-                    .next()
-                    .unwrap_or_default(),
-                h,
-            );
         }
-        let texto = html::texto(b, " ");
+        let texto = html::texto(*b, " ");
         for m in RE_NUM_LIVRE.captures_iter(texto.as_str()).flatten() {
             let Some(n) = norm_numero(&format!("{}/{}", &m[1], &m[2])) else {
                 continue;
@@ -823,12 +852,12 @@ pub fn citados(doc: &Html, proprio_numero: &str, proprio_hash: &str) -> Vec<Valu
             if re!(r"(proc|abertura|emitid|gerad|autuad|instaurad|\bno?\b|numero)").is_match(&antes)
                 && !re!(r"(lei|decreto|portaria|requisi|\brc\b|contrato|\bata\b|edital|pregao|oficio|memorando|resolucao|instrucao|acordao|cnpj|cpf)").is_match(&fim)
             {
-                add(n, String::new());
+                add(n, String::new(), "texto");
             }
         }
     }
     out.into_iter()
-        .map(|(numero, hash)| json!({"numero": numero, "hash": hash}))
+        .map(|(numero, hash, fonte)| json!({"numero": numero, "hash": hash, "fonte": fonte}))
         .collect()
 }
 

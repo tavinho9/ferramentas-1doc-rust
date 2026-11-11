@@ -8,7 +8,8 @@ use serde_json::Value;
 
 use super::args::Opcoes;
 use super::parse::{
-    GUARDAR_DESPACHOS, casa_setor, contem, de_iso, de_iso_v, igual, norm_numero, normcod,
+    GUARDAR_DESPACHOS, casa_setor, contem, de_iso, de_iso_v, forca_fonte, igual, norm_numero,
+    normcod,
 };
 use crate::re;
 use crate::texto::{corta, normtxt};
@@ -50,6 +51,9 @@ pub struct Novo {
     pub setor: String,
     pub url: String,
     pub vinculos: Vec<&'static str>,
+    /// como a citação foi lida, nas menções ("mencao", "link", "texto"; a mais
+    /// confiável primeiro)
+    pub fontes: Vec<String>,
     /// etapa do novo processo, quando ele foi aberto
     pub etapa: String,
 }
@@ -95,7 +99,8 @@ fn num(v: &Value, k: &str) -> String {
 pub struct Universo<'a> {
     pub por_numero: HashMap<String, &'a Value>,
     por_hash: HashMap<String, String>,
-    citam: HashMap<String, Vec<String>>,
+    /// citado (número ou hash) → [(número de quem cita, fonte da citação)]
+    citam: HashMap<String, Vec<(String, String)>>,
     filhos: HashMap<String, Vec<String>>,
 }
 
@@ -135,12 +140,16 @@ impl<'a> Universo<'a> {
                 .map(|v| v.as_slice())
                 .unwrap_or_default()
             {
+                let fonte = s(Some(c), "fonte");
                 for k in [s(Some(c), "numero"), s(Some(c), "hash").to_uppercase()] {
-                    if !k.is_empty() {
-                        let v = u.citam.entry(k).or_default();
-                        if !v.contains(&n) {
-                            v.push(n.clone());
-                        }
+                    if k.is_empty() {
+                        continue;
+                    }
+                    let v = u.citam.entry(k).or_default();
+                    match v.iter_mut().find(|(q, _)| *q == n) {
+                        Some(x) if forca_fonte(&fonte) < forca_fonte(&x.1) => x.1 = fonte.clone(),
+                        Some(_) => {}
+                        None => v.push((n.clone(), fonte.clone())),
                     }
                 }
             }
@@ -220,6 +229,7 @@ pub fn novos_processos(det: Option<&Value>, uni: Option<&Universo>, mencoes: boo
                 setor: s(Some(e), "setor"),
                 url: s(Some(e), "url"),
                 vinculos: vec![V_EMISSAO],
+                fontes: Vec::new(),
                 etapa: String::new(),
             })
             .collect(),
@@ -241,13 +251,19 @@ pub fn novos_processos(det: Option<&Value>, uni: Option<&Universo>, mencoes: boo
     if let (Some(det), Some(uni)) = (det, uni)
         && !proprio.is_empty()
     {
-        let mut add = |outro: &Value, vinculo: &'static str| {
+        let mut add = |outro: &Value, vinculo: &'static str, fonte: &str| {
             let n = num(outro, "numero");
             if let Some(x) = novos.iter_mut().find(|x| x.numero == n) {
                 // vínculo normal (emissão/origem) já basta; menções só se somam entre si
                 let normal = x.vinculos.iter().any(|v| *v == V_EMISSAO || *v == V_ORIGEM);
-                if !normal && !x.vinculos.contains(&vinculo) {
-                    x.vinculos.push(vinculo);
+                if !normal {
+                    if !x.vinculos.contains(&vinculo) {
+                        x.vinculos.push(vinculo);
+                    }
+                    if !fonte.is_empty() && !x.fontes.iter().any(|f| f == fonte) {
+                        x.fontes.push(fonte.to_string());
+                        x.fontes.sort_by_key(|f| forca_fonte(f));
+                    }
                 }
                 return;
             }
@@ -256,6 +272,11 @@ pub fn novos_processos(det: Option<&Value>, uni: Option<&Universo>, mencoes: boo
                 data: de_iso(&s(Some(outro), "emissao")),
                 url: s(Some(outro), "url"),
                 vinculos: vec![vinculo],
+                fontes: if fonte.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![fonte.to_string()]
+                },
                 ..Default::default()
             });
         };
@@ -267,7 +288,7 @@ pub fn novos_processos(det: Option<&Value>, uni: Option<&Universo>, mencoes: boo
         {
             let outro = uni.por_numero[n];
             if *n != proprio && eh_processo(&s(Some(outro), "tipo_doc")) {
-                add(outro, V_ORIGEM);
+                add(outro, V_ORIGEM, "");
             }
         }
         if mencoes {
@@ -280,7 +301,7 @@ pub fn novos_processos(det: Option<&Value>, uni: Option<&Universo>, mencoes: boo
                 if let Some(outro) = uni.achar(c)
                     && aceita_mencao(det, outro)
                 {
-                    add(outro, V_CITADO);
+                    add(outro, V_CITADO, &s(Some(c), "fonte"));
                 }
             }
             let mut chaves = vec![proprio.clone()];
@@ -288,16 +309,11 @@ pub fn novos_processos(det: Option<&Value>, uni: Option<&Universo>, mencoes: boo
             if !h.is_empty() {
                 chaves.push(h);
             }
-            let mut vistos: Vec<&String> = Vec::new();
             for k in &chaves {
-                for n in uni.citam.get(k).map(|v| v.as_slice()).unwrap_or_default() {
-                    if vistos.contains(&n) {
-                        continue;
-                    }
-                    vistos.push(n);
+                for (n, fonte) in uni.citam.get(k).map(|v| v.as_slice()).unwrap_or_default() {
                     let outro = uni.por_numero[n];
                     if aceita_mencao(det, outro) {
-                        add(outro, V_CITA);
+                        add(outro, V_CITA, fonte);
                     }
                 }
             }
