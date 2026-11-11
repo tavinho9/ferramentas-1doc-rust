@@ -21,6 +21,10 @@ pub const EPILOGO: &str = r#"Exemplos (no programa, escreva só as opções no c
     --fase Abertura --dias-etapa-min 15 --ordenar prioridade,dias_etapa:desc
   Regra da CPPFI (antes da Pesquisa de Mercado, ou depois mas com o último despacho citando a CPPFI):
     --antes-de "Pesquisa de Mercado" --excecao-cita-setor SPOT-DCL-GP-CPPFI --pessoa "João Otávio"
+  Emitiram novo processo (ex.: a Abertura saída da Fase Preparatória) em novembro, em todas as caixas:
+    --caixas todas --novo-processo-de 01/11/2026 --novo-processo-ate 30/11/2026
+  Na Etapa Final da Elaboração e ainda sem novo processo emitido:
+    --fase Elaboração --etapa "Etapa Final" --sem-novo-processo
   Processos de uma planilha/lista, sem varrer as caixas:
     --numeros-arquivo acompanhamento.xlsx
   Refiltrar sem acessar o 1Doc (usa o cache da última coleta):
@@ -30,6 +34,8 @@ pub const EPILOGO: &str = r#"Exemplos (no programa, escreva só as opções no c
 Datas: DD/MM/AAAA, AAAA-MM-DD, hoje, ontem ou -N (N dias atrás). Limites inclusivos.
 Textos: sem distinção de maiúsculas e acentos; "contém". Valores repetidos de um mesmo filtro = OU;
 filtros diferentes = E."#;
+
+const NOVO: &str = "Novo processo emitido a partir dele (evento 'emitiu o Proc. Administrativo …')";
 
 const MODELO: &str = "{before-help}uso: {usage}\n\n{about}\n\n{all-args}{after-help}";
 
@@ -229,6 +235,19 @@ pub struct Args {
     )]
     pub sem_mov_max: Option<i64>,
 
+    /// emitiu ao menos um novo processo
+    #[arg(long = "novo-processo", help_heading = NOVO)]
+    pub novo_processo: bool,
+    /// …emitido a partir de DATA
+    #[arg(long = "novo-processo-de", value_name = "DATA", help_heading = NOVO)]
+    pub novo_processo_de: Option<String>,
+    /// …emitido até DATA
+    #[arg(long = "novo-processo-ate", value_name = "DATA", help_heading = NOVO)]
+    pub novo_processo_ate: Option<String>,
+    /// não emitiu nenhum novo processo
+    #[arg(long = "sem-novo-processo", help_heading = NOVO)]
+    pub sem_novo_processo: bool,
+
     /// Urgente, Alta, Média, Baixa (vírgula)
     #[arg(long, value_name = "P", action = ArgAction::Append, help_heading = "Outros filtros")]
     pub prioridade: Vec<String>,
@@ -276,7 +295,7 @@ pub struct Args {
     pub csv: Option<String>,
     #[arg(long = "sem-xlsx", help_heading = "Saída e desempenho")]
     pub sem_xlsx: bool,
-    /// campos: numero, emissao, prioridade, fase, etapa, entrada, dias_etapa, ult_mov, dias_sem_mov (sufixo :desc)
+    /// campos: numero, emissao, prioridade, fase, etapa, entrada, dias_etapa, ult_mov, dias_sem_mov, novo_processo_em (sufixo :desc)
     #[arg(
         long,
         default_value = "fase,etapa,dias_etapa:desc",
@@ -335,6 +354,8 @@ pub struct Opcoes {
     pub emissao_ate: Option<NaiveDateTime>,
     pub ult_mov_de: Option<NaiveDateTime>,
     pub ult_mov_ate: Option<NaiveDateTime>,
+    pub novo_processo_de: Option<NaiveDateTime>,
+    pub novo_processo_ate: Option<NaiveDateTime>,
     /// id do setor logado (da sessão; no --offline, o da última coleta)
     pub id_setor: String,
 }
@@ -502,10 +523,12 @@ pub fn normalizar(mut a: Args, hoje: NaiveDate) -> Res<Opcoes> {
     let mudanca_de = data("mudanca-de", &a.mudanca_de, false)?;
     let emissao_de = data("emissao-de", &a.emissao_de, false)?;
     let ult_mov_de = data("ult-mov-de", &a.ult_mov_de, false)?;
+    let novo_processo_de = data("novo-processo-de", &a.novo_processo_de, false)?;
     let entrada_ate = data("entrada-ate", &a.entrada_ate, true)?;
     let mudanca_ate = data("mudanca-ate", &a.mudanca_ate, true)?;
     let emissao_ate = data("emissao-ate", &a.emissao_ate, true)?;
     let ult_mov_ate = data("ult-mov-ate", &a.ult_mov_ate, true)?;
+    let novo_processo_ate = data("novo-processo-ate", &a.novo_processo_ate, true)?;
     a.prioridade = lista(&a.prioridade);
     for v in [
         &mut a.etapa,
@@ -532,6 +555,13 @@ pub fn normalizar(mut a: Args, hoje: NaiveDate) -> Res<Opcoes> {
             "--offline precisa do cache; retire --sem-cache.",
         ));
     }
+    if a.sem_novo_processo
+        && (a.novo_processo || novo_processo_de.is_some() || novo_processo_ate.is_some())
+    {
+        return Err(Erro::encerrar(
+            "--sem-novo-processo não combina com --novo-processo, --novo-processo-de ou --novo-processo-ate.",
+        ));
+    }
     Ok(Opcoes {
         a,
         entrada_de,
@@ -542,6 +572,8 @@ pub fn normalizar(mut a: Args, hoje: NaiveDate) -> Res<Opcoes> {
         emissao_ate,
         ult_mov_de,
         ult_mov_ate,
+        novo_processo_de,
+        novo_processo_ate,
         id_setor: String::new(),
     })
 }

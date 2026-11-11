@@ -51,7 +51,7 @@ pub const TEXTOS_MULTIPLOS: [(&str, &str); 6] = [
     ("passou_por", "--passou-por"),
 ];
 /// campo → opção (valor único)
-pub const TEXTOS: [(&str, &str); 9] = [
+pub const TEXTOS: [(&str, &str); 11] = [
     ("antes_de", "--antes-de"),
     ("a_partir_de", "--a-partir-de"),
     ("emissao_de", "--emissao-de"),
@@ -60,6 +60,8 @@ pub const TEXTOS: [(&str, &str); 9] = [
     ("mudanca_ate", "--mudanca-ate"),
     ("entrada_de", "--entrada-de"),
     ("entrada_ate", "--entrada-ate"),
+    ("novo_processo_de", "--novo-processo-de"),
+    ("novo_processo_ate", "--novo-processo-ate"),
     ("numeros_arquivo", "--numeros-arquivo"),
 ];
 pub const INTEIROS: [(&str, &str); 3] = [
@@ -67,6 +69,9 @@ pub const INTEIROS: [(&str, &str); 3] = [
     ("dias_etapa_max", "--dias-etapa-max"),
     ("sem_mov_min", "--sem-mov-min"),
 ];
+/// "Emitiu novo processo:" (lista Sim/Não; vazio = tanto faz) → opção
+pub const NOVO_PROCESSO: [(&str, &str); 2] =
+    [("Sim", "--novo-processo"), ("Não", "--sem-novo-processo")];
 pub const BOOLEANOS: [(&str, &str); 4] = [
     ("etapa_exata", "--etapa-exata"),
     ("offline", "--offline"),
@@ -332,6 +337,24 @@ pub fn montar_argv(
     if !fase.is_empty() {
         argv.push("--fase".into());
         argv.push(fase.into());
+    }
+    let novo = form.texto("novo_processo").trim();
+    if !novo.is_empty() {
+        let Some((_, opcao)) = NOVO_PROCESSO.iter().find(|(v, _)| *v == novo) else {
+            return Err(FormularioInvalido(format!(
+                "'{novo}' não vale em \"Emitiu novo processo\" (use Sim ou Não)."
+            )));
+        };
+        if novo == "Não"
+            && ["novo_processo_de", "novo_processo_ate"]
+                .iter()
+                .any(|c| !form.texto(c).trim().is_empty())
+        {
+            return Err(FormularioInvalido(
+                "\"Emitiu novo processo: Não\" não combina com a data do novo processo: apague as datas ou escolha Sim.".into(),
+            ));
+        }
+        argv.push(opcao.to_string());
     }
     let prios: Vec<&str> = PRIORIDADES
         .iter()

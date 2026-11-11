@@ -145,7 +145,34 @@ pub fn kanban(p: &Processo, modelo: bool) -> String {
     format!(r#"<div class="workflow_v2_kanban">{blocos}</div>"#)
 }
 
+/// Evento da linha do tempo de um documento emitido a partir do processo. O
+/// carimbo é o instante de `quando` no horário de Brasília, como o do 1Doc.
+pub fn evento_emissao(
+    tipo: &str,
+    numero: &str,
+    hash: &str,
+    quando: chrono::NaiveDateTime,
+) -> String {
+    let mk = quando
+        .and_local_timezone(chrono::FixedOffset::west_opt(3 * 3600).unwrap())
+        .unwrap()
+        .timestamp();
+    format!(
+        r#"<div class="timeline_conteudo" data-datamk="{mk}">
+<div class="desp_notificacao"><div class="marcou marcou_file">
+  <span class="marcou_nome">Maria da Silva</span> <span class="badge_env">SS-DAF</span>
+  <small class="marcou_quem">emitiu o <a href="./?pg=doc/ver&hash={hash}&origem=emissao_evento_base">{tipo}
+    {numero}</a> a partir deste documento.</small>
+</div></div></div>"#
+    )
+}
+
 pub fn detalhe(p: &Processo) -> String {
+    detalhe_com(p, "")
+}
+
+/// Página do processo com `eventos` (HTML) a mais na linha do tempo.
+pub fn detalhe_com(p: &Processo, eventos: &str) -> String {
     let h = hoje();
     let mk = Local
         .from_local_datetime(&h.and_hms_opt(9, 15, 0).unwrap())
@@ -176,6 +203,7 @@ pub fn detalhe(p: &Processo) -> String {
   <div class="rf_de"><span class="badge_env">SS-DAF</span></div>
 </th></tr><tr><td class="celula_despacho"><div class="texto_original">Encaminho para análise.</div></td></tr>
 </table></div>
+{eventos}
 <div class="tm_conteudo"><div id="parent_wa" data-current_idph="1">{modelo}</div></div>
 </body></html>"#,
         num = p.numero,

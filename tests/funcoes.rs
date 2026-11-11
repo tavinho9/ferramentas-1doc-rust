@@ -430,6 +430,72 @@ mod busca_argv_testes {
     }
 
     #[test]
+    fn montar_argv_novo_processo() {
+        let argv = |f: &Formulario| ba::montar_argv(f, None, agora(), false);
+        let a = argv(
+            &form(&["entrada"])
+                .com("novo_processo", "Sim")
+                .com("novo_processo_de", "01/11/2026")
+                .com("novo_processo_ate", "-1"),
+        )
+        .unwrap();
+        assert_eq!(
+            a[2..],
+            [
+                "--novo-processo-de",
+                "01/11/2026",
+                "--novo-processo-ate",
+                "-1",
+                "--novo-processo"
+            ]
+        );
+        assert_eq!(ba::validar(&a), None);
+        assert_eq!(
+            argv(&form(&["entrada"]).com("novo_processo", "Não")).unwrap()[2..],
+            ["--sem-novo-processo"]
+        );
+        assert_eq!(
+            argv(&form(&["entrada"]).com("novo_processo_de", "hoje")).unwrap()[2..],
+            ["--novo-processo-de", "hoje"]
+        );
+        let erro = argv(
+            &form(&["entrada"])
+                .com("novo_processo", "Não")
+                .com("novo_processo_ate", "hoje"),
+        )
+        .unwrap_err();
+        assert!(erro.0.contains("não combina"), "{erro}");
+        // a mesma regra vale para quem digita as opções
+        let e = ba::validar(&v(&["--sem-novo-processo", "--novo-processo"])).unwrap();
+        assert!(e.contains("não combina"), "{e}");
+        let e = ba::validar(&v(&["--novo-processo-ate", "31/02/2026"])).unwrap();
+        assert!(e.contains("data inválida"), "{e}");
+    }
+
+    #[test]
+    fn novo_processo_so_conta_processo() {
+        use ferramentas1doc::busca::registro::novos_processos;
+        let det = serde_json::json!({
+            "emissoes": [
+                {"numero": "2/2026", "tipo": "Memorando", "data": "2026-11-05T10:00:00"},
+                {"numero": "9/2026", "tipo": "Proc. Administrativo", "data": "2026-11-06T09:00:00"},
+                {"numero": "8/2026", "tipo": "Proc. Administrativo", "data": "2026-11-01T09:00:00"}
+            ],
+            "derivados": ["2/2026", "9/2026", "8/2026"]
+        });
+        let nums: Vec<String> = novos_processos(Some(&det))
+            .into_iter()
+            .map(|n| n.numero)
+            .collect();
+        assert_eq!(nums, ["8/2026", "9/2026"]); // do mais antigo
+        // detalhe gravado antes desta leitura: só os números, sem data
+        let velho = novos_processos(Some(&serde_json::json!({"derivados": ["2/2026"]})));
+        assert_eq!(velho.len(), 1);
+        assert_eq!((velho[0].numero.as_str(), velho[0].data), ("2/2026", None));
+        assert!(novos_processos(Some(&serde_json::json!({}))).is_empty());
+    }
+
+    #[test]
     fn montar_argv_erros() {
         assert!(
             ba::montar_argv(&form(&[]), None, agora(), false)

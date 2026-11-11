@@ -29,6 +29,58 @@ impl Transicao {
     }
 }
 
+/// Um processo emitido a partir deste (evento "emitiu o … a partir deste documento").
+#[derive(Clone, Debug, Default)]
+pub struct Novo {
+    pub numero: String,
+    pub data: Option<NaiveDateTime>,
+    pub autor: String,
+    pub setor: String,
+    pub url: String,
+}
+
+/// Tipo de documento de uma emissão: "Proc. Administrativo" conta como
+/// processo novo; memorando, ofício etc. emitidos a partir do processo, não.
+pub fn eh_processo(tipo: &str) -> bool {
+    normtxt(tipo).starts_with("proc")
+}
+
+/// Processos emitidos a partir deste, com a data já lida, do mais antigo ao
+/// mais recente. Detalhe gravado no cache antes desta leitura só tem os
+/// números ("derivados"): entram sem data.
+pub fn novos_processos(det: Option<&Value>) -> Vec<Novo> {
+    let mut novos: Vec<Novo> = match det.and_then(|d| d.get("emissoes")) {
+        Some(e) => e
+            .as_array()
+            .map(|v| v.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .filter(|e| eh_processo(&s(Some(e), "tipo")))
+            .map(|e| Novo {
+                numero: s(Some(e), "numero"),
+                data: de_iso(&s(Some(e), "data")),
+                autor: s(Some(e), "autor"),
+                setor: s(Some(e), "setor"),
+                url: s(Some(e), "url"),
+            })
+            .collect(),
+        None => det
+            .and_then(|d| d.get("derivados"))
+            .and_then(Value::as_array)
+            .map(|v| v.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|n| Novo {
+                numero: n.to_string(),
+                ..Default::default()
+            })
+            .collect(),
+    };
+    novos.sort_by_key(|n| n.data.unwrap_or(NaiveDateTime::MIN));
+    novos
+}
+
 /// O registro de um processo (o dict `r` do `consolidar`).
 #[derive(Clone, Debug, Default)]
 pub struct Registro {
@@ -58,6 +110,9 @@ pub struct Registro {
     pub status_setor: String,
     pub pai: String,
     pub derivados: String,
+    pub novos: Vec<Novo>,
+    /// o mais recente; com o filtro de período, o mais recente dentro dele
+    pub novo_processo_em: Option<NaiveDateTime>,
     pub caixa: String,
     pub transicoes: Vec<Transicao>,
     pub despachos: Vec<Value>,
@@ -71,6 +126,8 @@ pub struct Registro {
     pub cita_alvo: Option<bool>,
     /// índices das transições no período do filtro de mudança
     pub trans_periodo: Vec<usize>,
+    /// índices dos processos novos que passaram no filtro de novo processo
+    pub novos_periodo: Vec<usize>,
 }
 
 /// Valor de um campo, para ordenar e escrever.
@@ -115,6 +172,7 @@ impl Registro {
             "status_setor" => t(&self.status_setor),
             "pai" => t(&self.pai),
             "derivados" => t(&self.derivados),
+            "novo_processo_em" => d(self.novo_processo_em),
             "caixa" => t(&self.caixa),
             "tem_detalhe" => Campo::Bool(self.tem_detalhe),
             "etapa_meu_setor" => b(self.etapa_meu_setor),
@@ -270,6 +328,7 @@ pub fn consolidar(
         status_setor: s(det, "status_setor"),
         pai: s(det, "pai"),
         derivados: lista_s(det, "derivados").join(", "),
+        novos: novos_processos(det),
         caixa: s(item, "caixa"),
         transicoes: trans,
         despachos: desp.clone(),
@@ -287,6 +346,7 @@ pub fn consolidar(
     } else {
         None
     };
+    r.novo_processo_em = r.novos.iter().filter_map(|n| n.data).max();
     r.dias_etapa = r.entrada.map(|e| (agora.date() - e.date()).num_days());
     r.dias_sem_mov = r.ult_mov.map(|e| (agora.date() - e.date()).num_days());
     let mud: Vec<&Transicao> = r.transicoes.iter().filter(|t| !t.mesma_etapa).collect();
@@ -522,6 +582,44 @@ pub fn montar_filtros(op: &Opcoes) -> Vec<Filtro> {
                     .collect();
                 !r.trans_periodo.is_empty()
             }),
+        );
+    }
+    if a.novo_processo || op.novo_processo_de.is_some() || op.novo_processo_ate.is_some() {
+        let (de, ate) = (op.novo_processo_de, op.novo_processo_ate);
+        let com_periodo = de.is_some() || ate.is_some();
+        let mut desc = "emitiu novo processo a partir dele".to_string();
+        if com_periodo {
+            desc.push_str(&format!(" {}", periodo(de, ate)));
+        }
+        add(
+            desc,
+            "geral",
+            "detalhe",
+            Box::new(move |r| {
+                r.novos_periodo = r
+                    .novos
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, n)| !com_periodo || no_intervalo(n.data, de, ate))
+                    .map(|(i, _)| i)
+                    .collect();
+                if com_periodo && !r.novos_periodo.is_empty() {
+                    r.novo_processo_em = r
+                        .novos_periodo
+                        .iter()
+                        .filter_map(|i| r.novos[*i].data)
+                        .max();
+                }
+                !r.novos_periodo.is_empty()
+            }),
+        );
+    }
+    if a.sem_novo_processo {
+        add(
+            "não emitiu novo processo a partir dele".into(),
+            "geral",
+            "detalhe",
+            Box::new(|r| r.novos.is_empty()),
         );
     }
     if op.emissao_de.is_some() || op.emissao_ate.is_some() {
