@@ -1,5 +1,5 @@
-//! Apoio dos testes: um 1Doc de mentira num servidor HTTP local (porta de
-//! tests/fake1doc.py) e um ambiente com pastas temporárias (o `conftest.py`).
+//! Apoio dos testes: um 1Doc de mentira num servidor HTTP local (tradução do
+//! tests/fake1doc.py da versão Python) e um ambiente com pastas temporárias.
 #![allow(dead_code)]
 
 use std::collections::HashMap;

@@ -84,7 +84,7 @@ pub fn configurar_fontes(ctx: &egui::Context) {
 
 /// Ícone da janela: a imagem 64×64 (PNG) de dentro do icone.ico.
 pub fn icone() -> Option<egui::IconData> {
-    let ico: &[u8] = include_bytes!("../../../ferramentas1doc/gui/icone.ico");
+    let ico: &[u8] = include_bytes!("../../assets/icone.ico");
     let n = u16::from_le_bytes([ico[4], ico[5]]) as usize;
     let mut melhor: Option<(u32, &[u8])> = None;
     for i in 0..n {

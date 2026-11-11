@@ -4,6 +4,7 @@ version = "1.1.0"
 edition = "2024"
 rust-version = "1.95"
 description = "Ferramentas 1Doc — Prefeitura de Montes Claros (versão Rust)"
+repository = "https://github.com/tavinho9/ferramentas-1doc-rust"
 publish = false
 default-run = "Ferramentas1Doc"
 

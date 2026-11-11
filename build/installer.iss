@@ -1,5 +1,5 @@
 ; Instalador do Ferramentas 1Doc, versão Rust (Inno Setup 6)
-;   iscc /DMyAppVersion=1.1.0 rust\build\installer.iss
+;   iscc /DMyAppVersion=1.1.0 build\installer.iss
 ; Instala para o usuário atual, sem pedir administrador:
 ;   %LOCALAPPDATA%\Programs\Ferramentas 1Doc Rust
 ; Fica ao lado da versão Python (outro AppId, outra pasta, outro atalho).
@@ -24,9 +24,9 @@ DisableProgramGroupPage=yes
 DisableDirPage=auto
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
-OutputDir=..\..\dist
+OutputDir=..\dist
 OutputBaseFilename=Ferramentas1Doc-Rust-Setup-{#MyAppVersion}
-SetupIconFile=..\..\ferramentas1doc\gui\icone.ico
+SetupIconFile=..\assets\icone.ico
 UninstallDisplayIcon={app}\{#MyAppExe}
 UninstallDisplayName={#MyAppName}
 Compression=lzma2/max
