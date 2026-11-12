@@ -568,6 +568,106 @@ mod busca_argv_testes {
         assert_eq!(texto_mencoes(&[], "", &[], |_| None), "");
     }
 
+    /// O link da célula Menções é o do primeiro processo da lista. Antes era o
+    /// da primeira citação com hash: com o número digitado antes do link, a
+    /// célula mostrava um processo e abria outro.
+    #[test]
+    fn mencoes_link_do_primeiro_da_lista() {
+        use ferramentas1doc::busca::registro::{itens_mencoes, mencoes_e_link};
+        let citados = [
+            serde_json::json!({"numero": "28.000/2026", "hash": "", "fonte": "texto"}), // hash não conhecido
+            serde_json::json!({"numero": "30.161/2026", "hash": "", "fonte": "texto"}), // hash conhecido
+            serde_json::json!({"numero": "", "hash": "5476d715a594730a44c8", "fonte": "link"}),
+            serde_json::json!({"numero": "39.144/2026", "hash": "AB02AAAA0000000000BB", "fonte": "mencao"}),
+        ];
+        let endereco = |n: &str, h: &str| {
+            let h = if h.is_empty() && n == "30.161/2026" {
+                "3016AAAA0000000000CC"
+            } else {
+                h
+            };
+            if h.is_empty() {
+                String::new()
+            } else {
+                format!("https://x/?pg=doc/ver&hash={h}")
+            }
+        };
+        let achar = |c: &serde_json::Value| {
+            c["hash"]
+                .as_str()
+                .is_some_and(|h| h.eq_ignore_ascii_case("5476D715A594730A44C8"))
+                .then(|| "26.831/2026".to_string())
+        };
+        let filhos = ["39.144/2026".to_string()];
+        // cada processo com o próprio endereço, na ordem da página; o número sem hash conhecido no fim
+        assert_eq!(
+            itens_mencoes(&citados, "", &filhos, achar, endereco),
+            [
+                (
+                    "30.161/2026 (número no texto)".to_string(),
+                    "https://x/?pg=doc/ver&hash=3016AAAA0000000000CC".to_string()
+                ),
+                (
+                    "26.831/2026".to_string(),
+                    "https://x/?pg=doc/ver&hash=5476D715A594730A44C8".to_string()
+                ),
+                (
+                    "39.144/2026 (filho)".to_string(),
+                    "https://x/?pg=doc/ver&hash=AB02AAAA0000000000BB".to_string()
+                ),
+                ("28.000/2026 (número no texto)".to_string(), String::new()),
+            ]
+        );
+        let (texto, url) = mencoes_e_link(&citados, "", &filhos, achar, endereco);
+        assert!(
+            texto.starts_with("30.161/2026 (número no texto), 26.831/2026"),
+            "{texto}"
+        );
+        assert!(url.ends_with("3016AAAA0000000000CC"), "{url}");
+        // sem endereço nenhum: a ordem da página e nenhum link
+        assert_eq!(
+            mencoes_e_link(&citados[..2], "", &[], |_| None, |_, _| String::new()),
+            (
+                "28.000/2026 (número no texto), 30.161/2026 (número no texto)".to_string(),
+                String::new()
+            )
+        );
+        assert_eq!(
+            mencoes_e_link(&[], "", &[], |_| None, |_, _| String::new()),
+            (String::new(), String::new())
+        );
+    }
+
+    /// Busca: o hash do link dá o endereço; o número digitado, o do processo já aberto com ele.
+    #[test]
+    fn endereco_citado_na_busca() {
+        use ferramentas1doc::busca::registro::{Universo, endereco_citado};
+        let dets = [
+            serde_json::json!({"numero": "30.161/2026", "hash": "3016AAAA0000000000CC",
+                               "url": "https://b/?pg=doc/ver&hash=3016AAAA0000000000CC&itd=3"}),
+            serde_json::json!({"numero": "30.162/2026", "hash": "3016BBBB0000000000DD", "itd": "24"}),
+        ];
+        let uni = Universo::novo(dets.iter());
+        let base = "https://montesclaros.1doc.com.br";
+        assert_eq!(
+            endereco_citado("", "ab02aaaa", Some(&uni), base, "3"),
+            "https://montesclaros.1doc.com.br/?pg=doc/ver&hash=AB02AAAA&itd=3"
+        );
+        assert_eq!(
+            endereco_citado("30.161/2026", "", Some(&uni), base, "3"),
+            "https://b/?pg=doc/ver&hash=3016AAAA0000000000CC&itd=3"
+        );
+        assert_eq!(
+            endereco_citado("30.162/2026", "", Some(&uni), base, "3"),
+            "https://montesclaros.1doc.com.br/?pg=doc/ver&hash=3016BBBB0000000000DD&itd=24"
+        );
+        assert_eq!(
+            endereco_citado("30.163/2026", "", Some(&uni), base, "3"),
+            ""
+        );
+        assert_eq!(endereco_citado("30.161/2026", "", None, base, "3"), "");
+    }
+
     const FASE: &str = "Fase Preparatória de Procedimento Licitatório";
     const ABERTURA: &str = "Abertura de Procedimento Licitatório";
     const ELAB: &str = "Elaboração de Documentação Preparatória";

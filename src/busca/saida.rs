@@ -146,6 +146,10 @@ pub fn escrever_xlsx(
     let link = Format::new()
         .set_font_color(Color::RGB(0x0563C1))
         .set_underline(FormatUnderline::Single);
+    let quebra_link = quebra
+        .clone()
+        .set_font_color(Color::RGB(0x0563C1))
+        .set_underline(FormatUnderline::Single);
 
     let cols: Vec<(&str, &str, f64)> = COLUNAS
         .iter()
@@ -162,6 +166,18 @@ pub fn escrever_xlsx(
             let largo = ["assunto", "historico", "obs", "para", "mencoes"].contains(campo);
             if *campo == "numero" && !r.url.is_empty() && !r.numero.is_empty() {
                 crate::planilha::link(ws, l, j as u16, &r.url, &limpo(&r.numero), &link)?;
+                continue;
+            }
+            if *campo == "mencoes" && !r.mencoes_url.is_empty() && !r.mencoes.is_empty() {
+                // leva ao primeiro processo da lista
+                crate::planilha::link(
+                    ws,
+                    l,
+                    j as u16,
+                    &r.mencoes_url,
+                    &limpo(&r.mencoes),
+                    &quebra_link,
+                )?;
                 continue;
             }
             let (base, data) = if largo {
