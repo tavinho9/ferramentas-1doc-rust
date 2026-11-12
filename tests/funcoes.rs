@@ -892,6 +892,99 @@ fn citacoes_le_mencao_do_1doc_fora_do_texto() {
     assert!(numeros.is_empty());
 }
 
+/// Menção a uma pessoa no corpo do despacho, com a marcação real do 1Doc: o
+/// href é a página que quem escreveu tinha aberta (aqui, outro processo,
+/// porque o texto foi colado), não a pessoa.
+const DESPACHO_COM_PESSOA: &str = concat!(
+    r#"<table class="relative despacho"><tr><td class="celula_despacho"><div class="texto_original fr-view">"#,
+    r#"Prezada <a class="mention label mention_1" style="color:#ffffff;font-size:12px;" "#,
+    r#"href="https://montesclaros.1doc.com.br/?pg=doc%2Fver&amp;hash=3AD9FC350E70AF6872C1B7A2&amp;itd=3"#,
+    r#"&amp;s=montesclaros&amp;origem=painel_setor&amp;caixa=entrada&amp;marcador=963214&amp;ordenar=2"#,
+    r#"&amp;ordem=desc" data-mention="1" data-tipo="1" data-id="511" data-id-setor="351">"#,
+    r#"Maria da Silva - SS-DAF</a>, segue para ciência. Ver também "#,
+    r#"<a class="mention label mention_2" data-mention="2" href="./?pg=doc/ver&amp;hash=5476D715A594730A44C82DCD">"#,
+    r#"Proc. Administrativo 26.831/2026 - Abertura</a>.</div></td></tr></table>"#,
+);
+
+#[test]
+fn citados_ignora_mencao_a_pessoa_no_despacho() {
+    use ferramentas1doc::busca::parse::mencoes_da_pagina;
+    assert_eq!(
+        mencoes_da_pagina(DESPACHO_COM_PESSOA, "1/2026", ""),
+        [
+            serde_json::json!({"numero": "26.831/2026", "hash": "5476D715A594730A44C82DCD", "fonte": "mencao"})
+        ]
+    );
+}
+
+#[test]
+fn citacoes_ignora_mencao_a_pessoa_no_despacho() {
+    let (hashes, numeros) =
+        ferramentas1doc::verificadores::citacoes(DESPACHO_COM_PESSOA, "1/2026", "2026");
+    // o número do texto da menção ao documento também vale; o hash da página de quem escreveu, não
+    assert_eq!(hashes, ["5476D715A594730A44C82DCD"]);
+    assert_eq!(numeros, ["26.831/2026"]);
+}
+
+/// O editor do 1Doc às vezes parte o número com a formatação. O navegador
+/// mostra o número inteiro; lido com espaço entre os pedaços, "40. 001/2026"
+/// virava 1/2026, ou a citação sumia.
+const NUMEROS_PARTIDOS: [&str; 6] = [
+    "40.<span>001/2026</span>",
+    "<span>40.</span><span>001/2026</span>",
+    "<b>40.</b>001/2026",
+    "40<span>.001/2026</span>",
+    "40.001<span>/2026</span>",
+    "40.<strong><em>001</em></strong>/2026",
+];
+
+#[test]
+fn citados_e_citacoes_numero_partido_pela_formatacao() {
+    use ferramentas1doc::busca::parse::mencoes_da_pagina;
+    for numero in NUMEROS_PARTIDOS {
+        let html = format!(
+            r#"<div class="texto_original fr-view">Segue o processo nº {numero} para análise.</div>"#
+        );
+        assert_eq!(
+            mencoes_da_pagina(&html, "1/2026", ""),
+            [serde_json::json!({"numero": "40.001/2026", "hash": "", "fonte": "texto"})],
+            "{numero}"
+        );
+        let (hashes, numeros) = ferramentas1doc::verificadores::citacoes(&html, "1/2026", "2026");
+        assert!(hashes.is_empty(), "{numero}");
+        assert_eq!(numeros, ["40.001/2026"], "{numero}");
+    }
+}
+
+/// Data no despacho, com contexto de processo antes: o 11/2026 de
+/// "12/11/2026" não é um processo.
+#[test]
+fn citacoes_data_nao_vira_processo() {
+    let html = concat!(
+        r#"<div class="texto_original fr-view">Recebido no dia 12/11/2026 e autuado em "#,
+        r#"1/11/2026; segue o processo nº 40.001/2026 e o nº 3/2026.</div>"#,
+    );
+    let (hashes, numeros) = ferramentas1doc::verificadores::citacoes(html, "1/2026", "2026");
+    assert!(hashes.is_empty());
+    assert_eq!(numeros, ["40.001/2026", "3/2026"]);
+}
+
+/// Em linha, o texto continua; bloco, quebra de linha e célula separam.
+/// Comentário e script ficam de fora, como no `texto`.
+#[test]
+fn texto_corrido() {
+    let doc = ferramentas1doc::html::doc(concat!(
+        r#"<div>Proc. n<sup>o</sup> 4<b>0</b>.001/2026<br>Lei 14.133/2021<p>processo 12</p>345/2026"#,
+        r#"<!-- 99.999/2026 --><script>var x = "88.888/2026";</script><table><tr><td>1</td>"#,
+        r#"<td>2</td></tr></table></div>"#,
+    ));
+    let texto = ferramentas1doc::html::texto_corrido(ferramentas1doc::html::raiz(&doc));
+    assert_eq!(
+        texto.split_whitespace().collect::<Vec<_>>().join(" "),
+        "Proc. no 40.001/2026 Lei 14.133/2021 processo 12 345/2026 1 2"
+    );
+}
+
 /// activeTab apontando para uma aba que não existe (arquivo editado por
 /// outro programa): fica a primeira, sem pânico.
 #[test]

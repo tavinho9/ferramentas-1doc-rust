@@ -552,7 +552,8 @@ fn montar_indice(ctx: &Ctx) -> Res<HashMap<String, Vec<String>>> {
     Ok(indice)
 }
 
-type Avaliar<'a> = dyn FnMut(&str, &str, bool, &mut Vec<Novo>) -> Res<()> + 'a;
+/// `citado`: `None` para o candidato guardado no cache (ver `buscar_novos`).
+type Avaliar<'a> = dyn FnMut(&str, &str, Option<bool>, &mut Vec<Novo>) -> Res<()> + 'a;
 
 /// Processos novos emitidos a partir de (número, ano, hash).
 fn buscar_novos(
@@ -567,8 +568,13 @@ fn buscar_novos(
     let vistos = std::cell::RefCell::new(HashSet::from([hash.to_string()]));
     let chave_cache = format!("novo:{numero}");
 
+    let (hashes, numeros) = v::citacoes(fonte, numero, ano);
+
+    // `citado == None`: candidato guardado no cache. Vale como citado só se
+    // ainda for citado na página, para não repetir um vínculo achado por uma
+    // leitura que já foi corrigida (ex.: menção a uma pessoa).
     let mut avaliar_candidato =
-        |h: &str, pagina: &str, citado: bool, achados: &mut Vec<Novo>| -> Res<()> {
+        |h: &str, pagina: &str, citado: Option<bool>, achados: &mut Vec<Novo>| -> Res<()> {
             if !vistos.borrow_mut().insert(h.to_string()) {
                 return Ok(());
             }
@@ -579,6 +585,8 @@ fn buscar_novos(
             if nome.0 == numero || !norm(&nome_em).starts_with("proc administrativo") {
                 return Ok(()); // memorando, parecer, ofício… emitido do processo
             }
+            let citado = citado
+                .unwrap_or_else(|| hashes.iter().any(|x| x == h) || numeros.contains(&nome.0));
             let (o_hash, o_num) = v::ler_origem(pagina);
             let vinculo = if o_hash.as_deref() == Some(hash) || o_num.as_deref() == Some(numero) {
                 "origem no 1Doc"
@@ -620,7 +628,7 @@ fn buscar_novos(
             Ok(())
         };
     let por_hash =
-        |h: &str, citado: bool, achados: &mut Vec<Novo>, aval: &mut Avaliar| -> Res<()> {
+        |h: &str, citado: Option<bool>, achados: &mut Vec<Novo>, aval: &mut Avaliar| -> Res<()> {
             if vistos.borrow().contains(h) {
                 return Ok(());
             }
@@ -631,7 +639,7 @@ fn buscar_novos(
             }
         };
     let por_numero =
-        |n: &str, citado: bool, achados: &mut Vec<Novo>, aval: &mut Avaliar| -> Res<()> {
+        |n: &str, citado: Option<bool>, achados: &mut Vec<Novo>, aval: &mut Avaliar| -> Res<()> {
             let Some(item) = Item::do_numero(n) else {
                 return Ok(());
             };
@@ -659,22 +667,21 @@ fn buscar_novos(
         })
         .unwrap_or_default();
     for n in do_cache {
-        por_numero(&n, true, &mut achados, &mut avaliar_candidato)?;
+        por_numero(&n, None, &mut achados, &mut avaliar_candidato)?;
     }
     // "É base de" / "emitiu o … a partir deste documento": a própria página lista os filhos.
     for (h, _, _) in ler_filhos(fonte) {
-        por_hash(&h, false, &mut achados, &mut avaliar_candidato)?;
+        por_hash(&h, Some(false), &mut achados, &mut avaliar_candidato)?;
     }
     let confirmado = achados
         .iter()
         .any(|a| a.vinculo == "origem no 1Doc" && tem_abertura(a));
-    let (hashes, numeros) = v::citacoes(fonte, numero, ano);
-    for h in hashes {
-        por_hash(&h, true, &mut achados, &mut avaliar_candidato)?;
+    for h in &hashes {
+        por_hash(h, Some(true), &mut achados, &mut avaliar_candidato)?;
     }
-    for n in numeros {
-        if !achados.iter().any(|a| a.numero == n) {
-            por_numero(&n, true, &mut achados, &mut avaliar_candidato)?;
+    for n in &numeros {
+        if !achados.iter().any(|a| a.numero == *n) {
+            por_numero(n, Some(true), &mut achados, &mut avaliar_candidato)?;
         }
     }
     if USAR_INDICE_ORIGEM && !confirmado {
@@ -687,7 +694,7 @@ fn buscar_novos(
             .chain(indice.get(numero).cloned().unwrap_or_default())
             .collect();
         for h in alvos {
-            por_hash(&h, false, &mut achados, &mut avaliar_candidato)?;
+            por_hash(&h, Some(false), &mut achados, &mut avaliar_candidato)?;
         }
     }
     if !achados.is_empty() {

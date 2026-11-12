@@ -644,7 +644,10 @@ pub fn ler_origem(fonte: &str) -> (Option<String>, Option<String>) {
 
 /// Candidatos citados nos despachos: (hashes de links, números). As menções
 /// do 1Doc (data-mention="2") vêm primeiro e valem em qualquer lugar da
-/// página; depois, os links e os números dos blocos .texto_original.
+/// página; depois, os links e os números dos blocos .texto_original. A
+/// menção a uma pessoa (data-mention="1") não é link para processo: o href
+/// dela é a página que quem escreveu tinha aberta. O texto é lido como o
+/// navegador mostra, para o número partido pela formatação sair inteiro.
 pub fn citacoes(
     fonte: &str,
     proprio_numero: &str,
@@ -675,7 +678,8 @@ pub fn citacoes(
     }
     for b in &blocos {
         for a in b.select(crate::sel!("a[href]")) {
-            if let Some(h) = hash_de(html::attr_ou_vazio(a, "href"))
+            if !crate::busca::parse::mencao_de_outro_tipo(a)
+                && let Some(h) = hash_de(html::attr_ou_vazio(a, "href"))
                 && !hashes.contains(&h)
             {
                 hashes.push(h);
@@ -684,10 +688,15 @@ pub fn citacoes(
     }
     let texto = blocos
         .iter()
-        .map(|b| html::texto(*b, " "))
+        .map(|b| html::texto_corrido(*b))
         .collect::<Vec<_>>()
         .join(" ");
-    for m in re!(r"(\d{1,3}(?:\.\d{3})+|\d+)\s*/\s*(\d{4})").find_iter(&texto) {
+    // A regra da Busca: sem dígito, "/" ou "." logo antes, para a data
+    // ("no dia 12/11/2026") não virar o processo 11/2026.
+    for m in crate::busca::parse::RE_NUM_LIVRE
+        .find_iter(&texto)
+        .flatten()
+    {
         let Some(num) = ler_numero(m.as_str()) else {
             continue;
         };
