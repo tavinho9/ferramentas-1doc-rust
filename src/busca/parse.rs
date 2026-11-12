@@ -242,7 +242,10 @@ pub fn norm_numero(s: &str) -> Option<String> {
     ))
 }
 
-static RE_NUM_LIVRE: LazyLock<fancy_regex::Regex> = LazyLock::new(|| {
+/// Número NN.NNN/AAAA solto no texto, sem dígito, "/" ou "." logo antes
+/// (a data "12/11/2026" não vira o processo 11/2026). Também usado pelo
+/// Faltantes e pelo Verificar (`verificadores::citacoes`).
+pub static RE_NUM_LIVRE: LazyLock<fancy_regex::Regex> = LazyLock::new(|| {
     fancy_regex::Regex::new(r"(?<![\d/.])(\d{1,3}(?:\.\d{3})+|\d{1,6})\s*/\s*(20\d{2})(?!\d)")
         .unwrap()
 });

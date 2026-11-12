@@ -691,7 +691,12 @@ pub fn citacoes(
         .map(|b| html::texto_corrido(*b))
         .collect::<Vec<_>>()
         .join(" ");
-    for m in re!(r"(\d{1,3}(?:\.\d{3})+|\d+)\s*/\s*(\d{4})").find_iter(&texto) {
+    // A regra da Busca: sem dígito, "/" ou "." logo antes, para a data
+    // ("no dia 12/11/2026") não virar o processo 11/2026.
+    for m in crate::busca::parse::RE_NUM_LIVRE
+        .find_iter(&texto)
+        .flatten()
+    {
         let Some(num) = ler_numero(m.as_str()) else {
             continue;
         };

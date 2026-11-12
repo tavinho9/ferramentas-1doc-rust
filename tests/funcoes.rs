@@ -956,6 +956,19 @@ fn citados_e_citacoes_numero_partido_pela_formatacao() {
     }
 }
 
+/// Data no despacho, com contexto de processo antes: o 11/2026 de
+/// "12/11/2026" não é um processo.
+#[test]
+fn citacoes_data_nao_vira_processo() {
+    let html = concat!(
+        r#"<div class="texto_original fr-view">Recebido no dia 12/11/2026 e autuado em "#,
+        r#"1/11/2026; segue o processo nº 40.001/2026 e o nº 3/2026.</div>"#,
+    );
+    let (hashes, numeros) = ferramentas1doc::verificadores::citacoes(html, "1/2026", "2026");
+    assert!(hashes.is_empty());
+    assert_eq!(numeros, ["40.001/2026", "3/2026"]);
+}
+
 /// Em linha, o texto continua; bloco, quebra de linha e célula separam.
 /// Comentário e script ficam de fora, como no `texto`.
 #[test]
