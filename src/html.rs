@@ -124,6 +124,78 @@ pub fn texto_doc(d: &Html, sep: &str) -> String {
     partes.join(sep)
 }
 
+/// Elementos que o navegador mostra na mesma linha do texto em volta. O
+/// editor do 1Doc às vezes parte um número com eles
+/// (`40.<span>001/2026</span>`, `<b>40.</b>001/2026`); lido com espaço entre
+/// os pedaços, ficava "40. 001/2026" e virava a citação 1/2026, que não existe
+/// na página.
+fn em_linha(nome: &str) -> bool {
+    matches!(
+        nome,
+        "a" | "abbr"
+            | "b"
+            | "bdi"
+            | "bdo"
+            | "cite"
+            | "code"
+            | "data"
+            | "del"
+            | "dfn"
+            | "em"
+            | "font"
+            | "i"
+            | "ins"
+            | "kbd"
+            | "label"
+            | "mark"
+            | "q"
+            | "s"
+            | "samp"
+            | "small"
+            | "span"
+            | "strike"
+            | "strong"
+            | "sub"
+            | "sup"
+            | "time"
+            | "tt"
+            | "u"
+            | "var"
+    )
+}
+
+fn coletar_corrido(no: NodeRef<'_, Node>, saida: &mut String) {
+    for filho in no.children() {
+        match filho.value() {
+            Node::Text(t) => saida.push_str(t),
+            Node::Element(e) => {
+                if conteiner_ignorado(e.name()) {
+                    continue;
+                }
+                let bloco = !em_linha(e.name());
+                if bloco {
+                    saida.push(' ');
+                }
+                coletar_corrido(filho, saida);
+                if bloco {
+                    saida.push(' ');
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Texto de `el` como o navegador mostra (o `busca.texto_corrido` do
+/// Python): um elemento em linha (span, b, a…) continua o texto do lado, sem
+/// espaço; os demais (div, p, br, td…) separam com um espaço. Como no
+/// `texto`, ficam de fora comentários e o conteúdo de script, style e template.
+pub fn texto_corrido(el: ElementRef<'_>) -> String {
+    let mut saida = String::new();
+    coletar_corrido(*el, &mut saida);
+    saida
+}
+
 /// Só os nós de texto filhos diretos.
 pub fn textos_diretos<'a>(el: ElementRef<'a>) -> Vec<&'a str> {
     el.children()

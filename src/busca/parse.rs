@@ -753,7 +753,10 @@ pub const MAX_CITADOS: usize = 40;
 /// Versão da leitura das citações gravada no detalhe ("citados_v"). Detalhe
 /// sem ela, ou com uma anterior, é reaberto com acesso ao 1Doc. 2: menções do
 /// 1Doc (data-mention) em qualquer lugar da página e a fonte de cada citação.
-pub const CITADOS_VERSAO: i64 = 2;
+/// 3: a menção a uma pessoa não conta como link para processo, e o número
+/// partido pela formatação do editor é lido inteiro (`html::texto_corrido`).
+/// O cache é o mesmo da versão Python: as duas mudam juntas.
+pub const CITADOS_VERSAO: i64 = 3;
 
 /// O detalhe traz as citações lidas pela versão atual (ver CITADOS_VERSAO)?
 pub fn citados_atuais(det: &Value) -> bool {
@@ -781,6 +784,22 @@ pub fn forca_fonte(fonte: &str) -> usize {
         .unwrap_or(FONTES_CITACAO.len())
 }
 
+/// Menção do 1Doc que não é a um documento: a uma pessoa (data-mention="1",
+/// o @ do despacho) ou de outro tipo. O href dela não leva ao mencionado: é o
+/// endereço da página que quem escreveu tinha aberta (com o
+/// origem=painel_setor&caixa=… da caixa dele), em geral a do processo em que
+/// o texto foi escrito. Colado em outro processo, parecia um link para aquele.
+pub fn mencao_de_outro_tipo(a: ElementRef<'_>) -> bool {
+    if let Some(tipo) = a.value().attr("data-mention") {
+        return tipo.trim() != "2";
+    }
+    a.value().classes().any(|c| {
+        c != "mention_2"
+            && c.strip_prefix("mention_")
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    })
+}
+
 /// Outros processos mencionados neste, de três fontes, da mais confiável para a menos:
 ///   - "mencao": a menção do 1Doc, escolhida na lista ao escrever o despacho.
 ///     Vem como `<a data-mention="2">` com o hash no href e "Proc.
@@ -789,7 +808,8 @@ pub fn forca_fonte(fonte: &str) -> usize {
 ///     (class "pre_visualizar"). Lida em qualquer lugar da página;
 ///   - "link": outro link para documento dentro do texto de abertura e dos
 ///     despachos (blocos .texto_original), com o número quando o texto do
-///     link o traz;
+///     link o traz. A menção a uma pessoa fica de fora
+///     (`mencao_de_outro_tipo`);
 ///   - "texto": número NN.NNN/AAAA digitado nesses blocos, com contexto de
 ///     processo antes ("processo", "abertura", "nº"…) e sem contexto de lei,
 ///     requisição, contrato etc. (a regra do Faltantes/Verificar).
@@ -849,13 +869,14 @@ pub fn citados(doc: &Html, proprio_numero: &str, proprio_hash: &str) -> Vec<Valu
         .collect();
     for b in &blocos {
         for a in b.select(sel!("a[href]")) {
-            if !param(&consulta(html::attr_ou_vazio(a, "href")), "hash").is_empty()
+            if !mencao_de_outro_tipo(a)
+                && !param(&consulta(html::attr_ou_vazio(a, "href")), "hash").is_empty()
                 && let Some((n, h)) = de_link(a)
             {
                 add(n, h, "link");
             }
         }
-        let texto = html::texto(*b, " ");
+        let texto = html::texto_corrido(*b);
         for m in RE_NUM_LIVRE.captures_iter(texto.as_str()).flatten() {
             let Some(n) = norm_numero(&format!("{}/{}", &m[1], &m[2])) else {
                 continue;

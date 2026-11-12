@@ -477,7 +477,8 @@ pub fn efetivo(n: &Novo) -> &Novo {
     }
 }
 
-type Avaliar<'a> = dyn FnMut(&str, &str, bool, &mut Vec<Novo>) -> Res<()> + 'a;
+/// `citado`: `None` para o candidato guardado no cache (ver `buscar_novos`).
+type Avaliar<'a> = dyn FnMut(&str, &str, Option<bool>, &mut Vec<Novo>) -> Res<()> + 'a;
 
 /// Processos novos emitidos a partir de `elab` (número, ano, hash).
 fn buscar_novos(
@@ -493,8 +494,13 @@ fn buscar_novos(
         std::cell::RefCell::new(HashSet::from([hash.to_string()]));
     let chave_cache = format!("novo:{numero}");
 
+    let (hashes, numeros) = v::citacoes(fonte, numero, ano);
+
+    // `citado == None`: candidato guardado no cache. Vale como citado só se
+    // ainda for citado na página, para não repetir um vínculo achado por uma
+    // leitura que já foi corrigida (ex.: menção a uma pessoa).
     let mut avaliar_candidato =
-        |h: &str, pagina: &str, citado: bool, achados: &mut Vec<Novo>| -> Res<()> {
+        |h: &str, pagina: &str, citado: Option<bool>, achados: &mut Vec<Novo>| -> Res<()> {
             if !vistos.borrow_mut().insert(h.to_string()) {
                 return Ok(());
             }
@@ -504,6 +510,8 @@ fn buscar_novos(
             if nome.0 == numero {
                 return Ok(());
             }
+            let citado = citado
+                .unwrap_or_else(|| hashes.iter().any(|x| x == h) || numeros.contains(&nome.0));
             let (o_hash, o_num) = v::ler_origem(pagina);
             let vinculo = if o_hash.as_deref() == Some(hash) || o_num.as_deref() == Some(numero) {
                 "origem no 1Doc"
@@ -537,25 +545,28 @@ fn buscar_novos(
             Ok(())
         };
 
-    let por_numero =
-        |numero_c: &str, citado: bool, achados: &mut Vec<Novo>, aval: &mut Avaliar| -> Res<()> {
-            let Some(item) = Item::do_numero(numero_c) else {
-                return Ok(());
-            };
-            if let Some(r) = v::abrir(
-                &ctx.http,
-                &ctx.cache,
-                ctx.driver.as_ref(),
-                &item,
-                None,
-                &confere,
-            )? {
-                aval(&r.hash, &r.pagina, citado, achados)?;
-            }
-            Ok(())
+    let por_numero = |numero_c: &str,
+                      citado: Option<bool>,
+                      achados: &mut Vec<Novo>,
+                      aval: &mut Avaliar|
+     -> Res<()> {
+        let Some(item) = Item::do_numero(numero_c) else {
+            return Ok(());
         };
+        if let Some(r) = v::abrir(
+            &ctx.http,
+            &ctx.cache,
+            ctx.driver.as_ref(),
+            &item,
+            None,
+            &confere,
+        )? {
+            aval(&r.hash, &r.pagina, citado, achados)?;
+        }
+        Ok(())
+    };
     let por_hash =
-        |h: &str, citado: bool, achados: &mut Vec<Novo>, aval: &mut Avaliar| -> Res<()> {
+        |h: &str, citado: Option<bool>, achados: &mut Vec<Novo>, aval: &mut Avaliar| -> Res<()> {
             if vistos.borrow().contains(h) {
                 return Ok(());
             }
@@ -577,15 +588,14 @@ fn buscar_novos(
         })
         .unwrap_or_default();
     for n in do_cache {
-        por_numero(&n, true, &mut achados, &mut avaliar_candidato)?;
+        por_numero(&n, None, &mut achados, &mut avaliar_candidato)?;
     }
-    let (hashes, numeros) = v::citacoes(fonte, numero, ano);
-    for h in hashes {
-        por_hash(&h, true, &mut achados, &mut avaliar_candidato)?;
+    for h in &hashes {
+        por_hash(h, Some(true), &mut achados, &mut avaliar_candidato)?;
     }
-    for n in numeros {
-        if !achados.iter().any(|a| a.numero == n) {
-            por_numero(&n, true, &mut achados, &mut avaliar_candidato)?;
+    for n in &numeros {
+        if !achados.iter().any(|a| a.numero == *n) {
+            por_numero(n, Some(true), &mut achados, &mut avaliar_candidato)?;
         }
     }
     if USAR_INDICE_ORIGEM {
@@ -598,7 +608,7 @@ fn buscar_novos(
             .chain(indice.get(numero).cloned().unwrap_or_default())
             .collect();
         for h in alvos {
-            por_hash(&h, false, &mut achados, &mut avaliar_candidato)?;
+            por_hash(&h, Some(false), &mut achados, &mut avaliar_candidato)?;
         }
     }
     if !achados.is_empty() {
