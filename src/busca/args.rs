@@ -363,6 +363,8 @@ pub struct Opcoes {
     pub novo_processo_ate: Option<NaiveDateTime>,
     /// id do setor logado (da sessão; no --offline, o da última coleta)
     pub id_setor: String,
+    /// endereço do 1Doc (`Ambiente::base`), para o link dos processos citados
+    pub base: String,
 }
 
 /// DD/MM/AAAA, AAAA-MM-DD, 'hoje', 'ontem' ou -N (N dias atrás). `fim`
@@ -580,5 +582,6 @@ pub fn normalizar(mut a: Args, hoje: NaiveDate) -> Res<Opcoes> {
         novo_processo_de,
         novo_processo_ate,
         id_setor: String::new(),
+        base: String::new(),
     })
 }

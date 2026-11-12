@@ -3,7 +3,7 @@
 //! acompanhamento, camada HTTP, localização do processo (número → hash),
 //! cache de hashes, origem e citações nas páginas e o ajuste de layout.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -428,39 +428,72 @@ impl Cache {
 /// Coluna Menções do Faltantes e do Verificar planilha: os processos citados
 /// na página (`crate::busca::parse::mencoes_da_pagina`), com (pai) e (filho)
 /// para os que já se sabe. Link sem número no texto vira número pelo cache,
-/// quando o hash já foi localizado antes. Devolve (texto, link da primeira
-/// menção).
+/// quando o hash já foi localizado antes. Devolve (texto, link da célula): o
+/// link é o do primeiro processo da lista (ver
+/// `crate::busca::registro::itens_mencoes`), pelo hash do próprio link da
+/// menção e, no número digitado, pelo hash já conhecido daquele número
+/// (`conhecidos`, lidos na página: pai, filho, processo novo; ou o cache).
 pub fn mencoes(
     amb: &Ambiente,
     cache: &Cache,
     citados: &[Value],
     pai: &str,
     filhos: &[String],
+    conhecidos: &HashMap<String, String>,
 ) -> (String, String) {
-    let mut por_hash: Option<std::collections::HashMap<String, String>> = None;
-    let texto = crate::busca::registro::texto_mencoes(citados, pai, filhos, |c| {
-        let h = c.get("hash").and_then(Value::as_str).unwrap_or("");
-        por_hash
-            .get_or_insert_with(|| {
-                cache
-                    .dados
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .filter(|(k, _)| ler_numero(k).is_some())
-                    .filter_map(|(k, v)| v.as_str().map(|v| (v.to_string(), k.clone())))
-                    .collect()
-            })
-            .get(h)
-            .cloned()
-    });
-    let url = citados
-        .iter()
-        .filter_map(|c| c.get("hash").and_then(Value::as_str))
-        .find(|h| !h.is_empty())
-        .map(|h| url_detalhe(amb, h))
-        .unwrap_or_default();
-    (texto, url)
+    let mut por_hash: Option<HashMap<String, String>> = None;
+    crate::busca::registro::mencoes_e_link(
+        citados,
+        pai,
+        filhos,
+        |c| {
+            let h = c.get("hash").and_then(Value::as_str).unwrap_or("");
+            por_hash
+                .get_or_insert_with(|| {
+                    cache
+                        .dados
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .filter(|(k, _)| ler_numero(k).is_some())
+                        .filter_map(|(k, v)| v.as_str().map(|v| (v.to_string(), k.clone())))
+                        .collect()
+                })
+                .get(h)
+                .cloned()
+        },
+        |n, h| {
+            let h = if h.is_empty() {
+                hash_conhecido(cache, n, conhecidos).unwrap_or_default()
+            } else {
+                h.to_string()
+            };
+            if h.is_empty() {
+                String::new()
+            } else {
+                url_detalhe(amb, &h)
+            }
+        },
+    )
+}
+
+/// Hash do processo `numero` que já se sabe: lido na página (`conhecidos`:
+/// pai, filho, processo novo) ou guardado no cache ao localizá-lo.
+pub fn hash_conhecido(
+    cache: &Cache,
+    numero: &str,
+    conhecidos: &HashMap<String, String>,
+) -> Option<String> {
+    if numero.is_empty() {
+        return None;
+    }
+    conhecidos
+        .get(numero)
+        .filter(|h| !h.is_empty())
+        .cloned()
+        .or_else(|| cache.texto(numero))
+        .filter(|h| re!(r"^[0-9A-Fa-f]{16,40}$").is_match(h))
+        .map(|h| h.to_uppercase())
 }
 
 /// Hashes que a resposta do Localizar pode trazer, em ordem de confiança:

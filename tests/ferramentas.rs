@@ -530,6 +530,13 @@ fn busca_novo_processo_por_mencao() {
     // coluna Menções
     let mencoes: Vec<&str> = res.regs.iter().map(|r| r.mencoes.as_str()).collect();
     assert_eq!(mencoes, ["", "39.144/2026 (filho)"]);
+    // a célula Menções leva ao processo citado (antes ficava sem link na Busca)
+    let resultado = comum::valores(&saida, Some("Resultado"));
+    let col = resultado[0].iter().position(|c| c == "Menções").unwrap() as u32 + 1;
+    assert_eq!(resultado[2][col as usize - 1], "39.144/2026 (filho)");
+    let link = comum::link(&saida, Some("Resultado"), col, 3).unwrap();
+    assert!(link.contains("hash=AB02AAAA0000000000BB"), "{link}");
+    assert_eq!(comum::link(&saida, Some("Resultado"), col, 2), None); // sem menção, sem link
     // a data é a de emissão do processo novo
     let datas: Vec<chrono::NaiveDate> = res
         .regs
@@ -745,6 +752,31 @@ mod faltantes_testes {
         );
     }
 
+    /// Número digitado no despacho, sem link nenhum: a célula Menções leva ao
+    /// primeiro processo da lista pelo hash que já se conhece (aqui, o do pai,
+    /// no cabeçalho). O número sem hash conhecido fica no fim.
+    #[test]
+    fn faltantes_mencao_so_por_numero() {
+        let fake = comum::com_despacho(
+            1,
+            Some(("28.000/2026", "2800AAAA0000000000EE")),
+            "Ver o processo nº 30.161/2026. Origem: Proc. Administrativo 28.000/2026.",
+            "",
+        );
+        let d = comum::dados(&fake.base);
+        let pl = comum::planilha(&d.pasta_dados().join("acomp.xlsx"), &["31.632/2026"]);
+        let destino = faltantes::executar(&d.amb, &pl, None, &comum::cred(), op())
+            .unwrap()
+            .unwrap();
+        let linhas = comum::valores(&destino, Some("Faltantes"));
+        assert_eq!(
+            linhas[1][8],
+            "28.000/2026 (pai; número no texto), 30.161/2026 (número no texto)"
+        );
+        let link = comum::link(&destino, Some("Faltantes"), 9, 2).unwrap();
+        assert!(link.contains("hash=2800AAAA0000000000EE"), "{link}");
+    }
+
     #[test]
     fn faltantes_periodo_escolhido() {
         let fake = comum::Fake1Doc::novo();
@@ -867,6 +899,32 @@ mod verificar_testes {
             sem_navegador: true,
             ..Default::default()
         }
+    }
+
+    /// O número digitado vem antes do link na página: antes, a célula
+    /// mostrava o número primeiro e abria o processo do link. Agora o link da
+    /// célula é sempre o do primeiro da lista.
+    #[test]
+    fn verificar_planilha_mencao_antes_do_link() {
+        let fake = comum::com_despacho(
+            0,
+            None,
+            "Ver o processo nº 30.161/2026.</div><div class=\"texto_original\">Segue \
+             <a href=\"./?pg=doc/ver&amp;hash=5476D715A594730A44C82DCD\">neste link</a>.",
+            "",
+        );
+        let d = comum::dados(&fake.base);
+        let pl = comum::planilha(&d.pasta_dados().join("acomp.xlsx"), &["31.632/2026"]);
+        let destino = vp::executar(&d.amb, &pl, Some("Acompanhamento"), &comum::cred(), op())
+            .unwrap()
+            .unwrap();
+        let linhas = comum::valores(&destino, None);
+        assert_eq!(
+            linhas[1][8],
+            "link 5476D715A5…, 30.161/2026 (número no texto)"
+        );
+        let link = comum::link(&destino, None, 9, 2).unwrap();
+        assert!(link.contains("hash=5476D715A594730A44C82DCD"), "{link}");
     }
 
     #[test]

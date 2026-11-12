@@ -886,6 +886,7 @@ pub fn executar(
     agora: NaiveDateTime,
 ) -> Res<Resultado> {
     let a = op.a.clone();
+    op.base = amb.base();
     let mut itds_ordem = args::lista(std::slice::from_ref(&a.itd));
     if itds_ordem.is_empty() {
         itds_ordem = vec!["3".into()];
@@ -1254,7 +1255,7 @@ pub fn executar(
         ("Menções".into(), resumo_mencoes),
         (
             "Coluna Menções".into(),
-            "Todos os processos citados no texto de abertura e nos despachos deste — menção do 1Doc, link ou número com 'processo', 'nº'… antes —, mesmo quando não dá para dizer se são o pai ou o filho. '(pai)': o processo de origem; '(filho)': um dos novos processos; '(número no texto)': citado só pelo número digitado.".into(),
+            "Todos os processos citados no texto de abertura e nos despachos deste — menção do 1Doc, link ou número com 'processo', 'nº'… antes —, mesmo quando não dá para dizer se são o pai ou o filho. '(pai)': o processo de origem; '(filho)': um dos novos processos; '(número no texto)': citado só pelo número digitado. A célula leva ao primeiro processo da lista; o número digitado cujo processo não foi aberto (sem hash conhecido) fica no fim, sem link.".into(),
         ),
         ("Dias".into(), "Dias corridos de calendário até a data de posição.".into()),
     ];

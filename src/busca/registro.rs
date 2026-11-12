@@ -332,26 +332,32 @@ pub fn novos_processos(det: Option<&Value>, uni: Option<&Universo>, mencoes: boo
     novos
 }
 
-/// Coluna "Menções": todos os processos citados, mesmo quando não dá para
-/// dizer se são o pai ou o filho. "(pai)" é o processo de origem; "(filho)",
-/// um dos processos novos; "(número no texto)", citação só pelo número
-/// digitado. `achar(citado)` dá o número de um link sem número. Ex.:
-/// "28.133/2026 (pai), 39.144/2026 (filho), 30.161/2026 (número no texto)".
-pub fn texto_mencoes(
+/// Os processos da coluna "Menções", cada um com o endereço dele no 1Doc:
+/// [(rótulo, url)]. "(pai)" é o processo de origem; "(filho)", um dos
+/// processos novos; "(número no texto)", citação só pelo número digitado.
+/// `achar(citado)` dá o número de um link sem número; `endereco(numero,
+/// hash)` dá o endereço do processo citado ("" se não se sabe): pelo hash do
+/// próprio link e, no número digitado, pelo hash que já se conhece para
+/// aquele número. Os que têm endereço vêm primeiro (na ordem da página), para
+/// o link da célula ser o do primeiro processo da lista; o número sem hash
+/// conhecido fica no fim, sem link.
+pub fn itens_mencoes(
     citados: &[Value],
     pai: &str,
     filhos: &[String],
     mut achar: impl FnMut(&Value) -> Option<String>,
-) -> String {
+    mut endereco: impl FnMut(&str, &str) -> String,
+) -> Vec<(String, String)> {
     let pai = norm_numero(pai).unwrap_or_default();
     let filhos: Vec<String> = filhos.iter().filter_map(|f| norm_numero(f)).collect();
-    citados
+    let mut itens: Vec<(String, String)> = citados
         .iter()
         .map(|c| {
             let mut n = s(Some(c), "numero");
             if n.is_empty() {
                 n = achar(c).unwrap_or_default();
             }
+            let h = s(Some(c), "hash").to_uppercase();
             let mut extra: Vec<&str> = Vec::new();
             if !n.is_empty() && n == pai {
                 extra.push("pai");
@@ -361,20 +367,94 @@ pub fn texto_mencoes(
             if s(Some(c), "fonte") == "texto" {
                 extra.push("número no texto");
             }
+            let url = endereco(&n, &h);
             let rotulo = if n.is_empty() {
-                let h: String = s(Some(c), "hash").chars().take(10).collect();
-                format!("link {h}…")
+                let curto: String = h.chars().take(10).collect();
+                format!("link {curto}…")
             } else {
                 n
             };
-            if extra.is_empty() {
+            let rotulo = if extra.is_empty() {
                 rotulo
             } else {
                 format!("{rotulo} ({})", extra.join("; "))
-            }
+            };
+            (rotulo, url)
         })
-        .collect::<Vec<_>>()
-        .join(", ")
+        .collect();
+    itens.sort_by_key(|(_, url)| url.is_empty()); // estável: mantém a ordem da página
+    itens
+}
+
+/// Coluna "Menções": todos os processos citados, mesmo quando não dá para
+/// dizer se são o pai ou o filho (ver `itens_mencoes`). Ex.:
+/// "28.133/2026 (pai), 39.144/2026 (filho), 30.161/2026 (número no texto)".
+pub fn texto_mencoes(
+    citados: &[Value],
+    pai: &str,
+    filhos: &[String],
+    achar: impl FnMut(&Value) -> Option<String>,
+) -> String {
+    mencoes_e_link(citados, pai, filhos, achar, |_, _| String::new()).0
+}
+
+/// (texto da coluna Menções, link da célula): o link é o do primeiro
+/// processo da lista.
+pub fn mencoes_e_link(
+    citados: &[Value],
+    pai: &str,
+    filhos: &[String],
+    achar: impl FnMut(&Value) -> Option<String>,
+    endereco: impl FnMut(&str, &str) -> String,
+) -> (String, String) {
+    let itens = itens_mencoes(citados, pai, filhos, achar, endereco);
+    let url = itens.first().map(|i| i.1.clone()).unwrap_or_default();
+    (
+        itens
+            .into_iter()
+            .map(|i| i.0)
+            .collect::<Vec<_>>()
+            .join(", "),
+        url,
+    )
+}
+
+/// Endereço no 1Doc de um processo citado: pelo hash do link (menção do 1Doc
+/// ou link no texto); sem hash (número digitado), o do processo com aquele
+/// número já aberto nesta busca, no índice das caixas ou no cache. "" quando
+/// não se sabe: o número sozinho não dá endereço.
+pub fn endereco_citado(
+    numero: &str,
+    hash: &str,
+    uni: Option<&Universo>,
+    base: &str,
+    itd: &str,
+) -> String {
+    let base = if base.ends_with('/') {
+        base.to_string()
+    } else {
+        format!("{base}/")
+    };
+    if !hash.is_empty() {
+        return format!("{base}?pg=doc/ver&hash={}&itd={itd}", hash.to_uppercase());
+    }
+    let n = norm_numero(numero).unwrap_or_default();
+    let Some(d) = uni.and_then(|u| u.por_numero.get(&n).copied()) else {
+        return String::new();
+    };
+    let url = s(Some(d), "url");
+    if !url.is_empty() {
+        return url;
+    }
+    let h = s(Some(d), "hash").to_uppercase();
+    if h.is_empty() {
+        return String::new();
+    }
+    let itd_d = s(Some(d), "itd");
+    format!(
+        "{base}?pg=doc/ver&hash={h}&itd={}",
+        if itd_d.is_empty() { itd } else { &itd_d }
+    )
 }
 
 /// "40.001/2026 (emissão), 39.144/2026 (cita este)" para a coluna do Resultado.
@@ -419,6 +499,8 @@ pub struct Registro {
     pub novos_texto: String,
     /// coluna Menções (ver `texto_mencoes`)
     pub mencoes: String,
+    /// link da célula Menções: o do primeiro processo da lista
+    pub mencoes_url: String,
     /// o mais recente; com o filtro de período, o mais recente dentro dele
     pub novo_processo_em: Option<NaiveDateTime>,
     pub caixa: String,
@@ -665,9 +747,24 @@ pub fn consolidar(
         .map(|v| v.as_slice())
         .unwrap_or_default();
     let filhos: Vec<String> = r.novos.iter().map(|n| n.numero.clone()).collect();
-    r.mencoes = texto_mencoes(citados, &r.pai, &filhos, |c| {
-        uni.and_then(|u| u.achar(c)).map(|d| s(Some(d), "numero"))
-    });
+    // Coluna Menções e o link da célula (o do primeiro processo da lista)
+    let base = if op.base.is_empty() {
+        &op.a.base
+    } else {
+        &op.base
+    };
+    let itd = if r.itd.is_empty() {
+        "3".to_string()
+    } else {
+        r.itd.clone()
+    };
+    (r.mencoes, r.mencoes_url) = mencoes_e_link(
+        citados,
+        &r.pai,
+        &filhos,
+        |c| uni.and_then(|u| u.achar(c)).map(|d| s(Some(d), "numero")),
+        |n, h| endereco_citado(n, h, uni, base, &itd),
+    );
     if let Some(d) = det
         && !super::parse::citados_atuais(d)
     {

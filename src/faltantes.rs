@@ -898,16 +898,26 @@ pub struct Classificado {
     pub origem_num: String,
     pub novos: Vec<String>,
     pub trecho_cancel: String,
-    /// coluna Menções e o link da primeira menção
+    /// coluna Menções e o link da célula (o do primeiro processo da lista)
     pub mencoes: String,
     pub mencoes_url: String,
+    /// número → hash lidos na página (origem, processos novos), para o link
+    /// do número digitado na coluna Menções
+    pub hashes_conhecidos: HashMap<String, String>,
 }
 
 /// Coluna Menções: os processos citados na página, com (pai) para a origem e
-/// (filho) para o processo novo achado, se já se sabe.
+/// (filho) para o processo novo achado, se já se sabe; o link da célula é o
+/// do primeiro processo da lista (ver `v::mencoes`).
 fn anotar_mencoes(ctx: &Ctx, res: &mut Classificado, citados: &[Value]) {
-    (res.mencoes, res.mencoes_url) =
-        v::mencoes(ctx.amb, &ctx.cache, citados, &res.origem_num, &res.novos);
+    (res.mencoes, res.mencoes_url) = v::mencoes(
+        ctx.amb,
+        &ctx.cache,
+        citados,
+        &res.origem_num,
+        &res.novos,
+        &res.hashes_conhecidos,
+    );
 }
 
 fn classificar(ctx: &Ctx, ln: &LinhaLista) -> Res<Classificado> {
@@ -1042,8 +1052,11 @@ fn classificar(ctx: &Ctx, ln: &LinhaLista) -> Res<Classificado> {
             trecho_em_volta(&d.texto, posicao_cancelamento(&d.texto).unwrap_or(0), 150);
         return Ok(res);
     }
-    let (_o_hash, o_num) = v::ler_origem(&fonte);
+    let (o_hash, o_num) = v::ler_origem(&fonte);
     res.origem_num = o_num.clone().unwrap_or_default();
+    if let (Some(h), Some(n)) = (&o_hash, &o_num) {
+        res.hashes_conhecidos.insert(n.clone(), h.clone());
+    }
     anotar_mencoes(ctx, &mut res, &citados);
     if let Some(o) = o_num.filter(|o| ctx.planilha.contains(o)) {
         res.situacao = VINCULADO.into();
@@ -1054,9 +1067,10 @@ fn classificar(ctx: &Ctx, ln: &LinhaLista) -> Res<Classificado> {
         let novos = buscar_novos(ctx, &ln.numero, &res.ano, &ln.hash, &fonte, 1)?;
         let mut todos = Vec::new();
         for n in &novos {
-            todos.push(n.numero.clone());
-            if let Some(v) = &n.via {
-                todos.push(v.numero.clone());
+            for x in std::iter::once(n).chain(n.via.as_deref()) {
+                todos.push(x.numero.clone());
+                res.hashes_conhecidos
+                    .insert(x.numero.clone(), x.hash.clone());
             }
         }
         res.novos = todos.clone();
@@ -1307,7 +1321,7 @@ fn preencher_aba(
             if j == 0 {
                 crate::planilha::link(ws, l, c, &linhas[i].url, txt, &link)?;
             } else if j == 8 && !linhas[i].mencoes_url.is_empty() {
-                // Menções: a célula leva à primeira menção
+                // Menções: a célula leva ao primeiro processo da lista
                 crate::planilha::link(ws, l, c, &linhas[i].mencoes_url, txt, &link)?;
             } else if let Some(d) = dt {
                 let f = if chrono::Timelike::hour(d) != 0 || chrono::Timelike::minute(d) != 0 {

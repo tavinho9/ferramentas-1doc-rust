@@ -6,10 +6,12 @@
 //! que chegaram à Pesquisa de Mercado ou passaram dela: a aba original,
 //! formatação preservada, sem as linhas dos demais, mais as colunas
 //! Etapa atual (1Doc) | Processo pai | Processo filho | Menções |
-//! Objeto (abertura) | Observação; o número, o pai, o filho e a primeira
-//! menção viram link para o 1Doc; autofiltro em todas as colunas e cabeçalho
-//! congelado. Menções: todos os processos citados no texto de abertura e nos
-//! despachos, mesmo quando não dá para dizer se são o pai ou o filho.
+//! Objeto (abertura) | Observação; o número, o pai, o filho e o primeiro
+//! processo da coluna Menções viram link para o 1Doc; autofiltro em todas as
+//! colunas e cabeçalho congelado. Menções: todos os processos citados no
+//! texto de abertura e nos despachos, mesmo quando não dá para dizer se são o
+//! pai ou o filho; o número digitado cujo hash não se conhece fica no fim,
+//! sem link.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -739,9 +741,12 @@ pub struct Resultado {
     pub pai: Option<(String, String)>,
     pub filhos: Vec<Filho>,
     pub objeto_filho: Option<String>,
-    /// coluna Menções e o link da primeira menção
+    /// coluna Menções e o link da célula (o do primeiro processo da lista)
     pub mencoes: String,
     pub mencoes_url: String,
+    /// número → hash dos processos novos achados, para o link do número
+    /// digitado na coluna Menções
+    pub hashes_novos: HashMap<String, String>,
 }
 
 /// A linha vai para a planilha?
@@ -756,6 +761,14 @@ pub fn entra(r: &Resultado) -> bool {
 fn aplicar_novo_processo(ctx: &Ctx, res: &mut Resultado, fonte: &str) -> Res<()> {
     let novos = buscar_novos(ctx, &res.item.numero, &res.item.ano, &res.hash, fonte, 1)?;
     res.novos = novos.iter().map(|n| n.numero.clone()).collect();
+    for n in &novos {
+        // hashes para o link da coluna Menções
+        let mut x = Some(n);
+        while let Some(y) = x {
+            res.hashes_novos.insert(y.numero.clone(), y.hash.clone());
+            x = y.via.as_deref();
+        }
+    }
     let Some(principal) = novos.first() else {
         res.obs
             .push_str(" — nenhum novo processo emitido encontrado");
@@ -903,7 +916,19 @@ fn processar(ctx: &Ctx, item: &Item) -> Res<Resultado> {
     filhos.extend(res.cadeia.split('→').map(|x| x.trim().to_string()));
     let citados = crate::busca::parse::mencoes_da_pagina(fonte, &item.numero, &achado.hash);
     let pai = res.pai.as_ref().map(|p| p.0.clone()).unwrap_or_default();
-    (res.mencoes, res.mencoes_url) = v::mencoes(ctx.amb, &ctx.cache, &citados, &pai, &filhos);
+    // hashes lidos nesta página: o do pai (cabeçalho), os de "É base de" e os
+    // dos processos novos; o link da célula é o do primeiro processo da lista
+    let mut conhecidos = res.hashes_novos.clone();
+    for f in &res.filhos {
+        conhecidos.insert(f.numero.clone(), f.hash.clone());
+    }
+    if let Some((n, url)) = &res.pai
+        && let Some(h) = v::hash_de(url)
+    {
+        conhecidos.insert(n.clone(), h);
+    }
+    (res.mencoes, res.mencoes_url) =
+        v::mencoes(ctx.amb, &ctx.cache, &citados, &pai, &filhos, &conhecidos);
     Ok(res)
 }
 

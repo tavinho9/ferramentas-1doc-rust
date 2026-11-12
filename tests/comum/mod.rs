@@ -282,6 +282,23 @@ pub const ANEXO_COM_MENCAO: &str = r#"<a class=" pre_visualizar" data-mention="2
 /// O 1Doc de mentira com o processo `i` de PROCESSOS trazendo as menções
 /// acima no despacho e o processo de origem 28.000/2026 no cabeçalho.
 pub fn com_mencoes(i: usize) -> Fake1Doc {
+    com_despacho(
+        i,
+        Some(("28.000/2026", "ZZZZ0000ZZZZ0000ZZZZ")),
+        DESPACHO_COM_MENCOES,
+        ANEXO_COM_MENCAO,
+    )
+}
+
+/// O 1Doc de mentira com o processo `i` de PROCESSOS trazendo `despacho`
+/// (HTML do bloco de texto) e `anexos` (HTML fora dele) e, no cabeçalho, o
+/// processo de origem `pai` (número, hash).
+pub fn com_despacho(
+    i: usize,
+    pai: Option<(&'static str, &'static str)>,
+    despacho: &'static str,
+    anexos: &'static str,
+) -> Fake1Doc {
     let p: &'static Processo = &PROCESSOS[i];
     Fake1Doc::com(Some(Box::new(move |q| {
         (q.query.get("pg").map(String::as_str) == Some("doc/ver")
@@ -298,9 +315,9 @@ pub fn com_mencoes(i: usize) -> Fake1Doc {
                 assunto: ABERTURA,
                 etapas: &p.etapas,
                 mk: carimbo_hoje(),
-                pai: Some(("28.000/2026", "ZZZZ0000ZZZZ0000ZZZZ")),
-                despacho: DESPACHO_COM_MENCOES,
-                anexos: ANEXO_COM_MENCAO,
+                pai,
+                despacho,
+                anexos,
                 eventos: "",
             }))
         })
